@@ -71,3 +71,24 @@ Predicted congestion is classified into:
 LOW
 MEDIUM
 HIGH
+
+
+
+---
+
+## ⚡ How to Run
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/Harsh-jethva/bob-ai-hackathon-Elite.git
+cd bob-ai-hackathon-Elite
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run the full pipeline (generates data, trains the congestion model,
+#    optimizes the 72h plan, prints KPIs vs FCFS baseline)
+python -m src.main
+
+# 4. Open the dashboard (http://localhost:8501)
+streamlit run src/app/dashboard.py
