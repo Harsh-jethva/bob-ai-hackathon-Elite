@@ -11,9 +11,9 @@
 | Role | Name | Email |
 |---|---|---|
 | Team Lead | **Deep Tandel** | 24it098@charusat.edu.in |
-| Member | **Harsh Jethva** | — |
-| Member | **Dax Chauhan** | — |
-| Member | **Maulik Vaghela** | — |
+| Member | **Harsh Jethva** | 24it115@charusat.edu.in |
+| Member | **Dax Chauhan** | 24it007@charusat.edu.in |
+| Member | **Maulik Vaghela** | 24it105@charusat.edu.in |
 
 **Track:** AI
 
