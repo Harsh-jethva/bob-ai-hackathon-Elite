@@ -33,8 +33,10 @@ class PlanResult:
 
 def _compute_kpis(assignments: List[ScheduleAssignment],
                     vessels: List[Vessel],
+                    berths: List[Berth],
+                    cranes: List[Crane],
                     horizon_hours: float) -> Dict[str, float]:
-    """Compute KPIs for a plan. Guard against division by zero (PRD 13)."""
+    """Compute KPIs for a plan with proper population denominators (PRD 13)."""
     n = len(assignments)
     if n == 0:
         return {
@@ -45,22 +47,27 @@ def _compute_kpis(assignments: List[ScheduleAssignment],
             "crane_utilization": 0.0,
         }
 
-    waits = [a.wait_time for a in assignments]
-    delays = [a.delay for a in assignments]
+    scheduled = [a for a in assignments if not a.deferred]
     deferred = [a for a in assignments if a.deferred]
 
+    waits = [a.wait_time for a in scheduled]
+    delays = [a.delay for a in scheduled]
+
+    avg_wait = round(sum(waits) / len(waits), 2) if waits else 0.0
+    avg_delay = round(sum(delays) / len(delays), 2) if delays else 0.0
+
+    total_berth_cap = max(1.0, len(berths) * horizon_hours)
+    total_crane_cap = max(1.0, len(cranes) * horizon_hours)
+
+    berth_occupied_h = sum(max(0.0, min(horizon_hours, a.end_time) - a.start_time) for a in scheduled)
+    crane_occupied_h = sum(max(0.0, min(horizon_hours, a.end_time) - a.start_time) for a in scheduled)
+
     return {
-        "avg_wait_hours": round(sum(waits) / n, 2),
-        "avg_delay_hours": round(sum(delays) / n, 2),
+        "avg_wait_hours": avg_wait,
+        "avg_delay_hours": avg_delay,
         "deferred_count": len(deferred),
-        "berth_utilization": round(
-            sum(a.end_time - a.start_time for a in assignments)
-            / max(len(set(a.berth_id for a in assignments)) * horizon_hours, 1), 3
-        ),
-        "crane_utilization": round(
-            sum(a.end_time - a.start_time for a in assignments)
-            / max(len(set(a.crane_id for a in assignments)) * horizon_hours, 1), 3
-        ),
+        "berth_utilization": min(1.0, round(berth_occupied_h / total_berth_cap, 3)),
+        "crane_utilization": min(1.0, round(crane_occupied_h / total_crane_cap, 3)),
     }
 
 
@@ -91,26 +98,30 @@ def generate_fcfs(
         port_cranes = [c for c in cranes if c.port_id == best.port_id]
         if not port_cranes:
             port_cranes = cranes
-        assigned_crane = port_cranes[0] if port_cranes else cranes[0]
-        start = max(earliest, crane_next[assigned_crane.crane_id])
+        # Distribute across available cranes at port
+        assigned_crane = min(port_cranes, key=lambda c: crane_next[c.crane_id]) if port_cranes else (cranes[0] if cranes else None)
+        crane_start = crane_next[assigned_crane.crane_id] if assigned_crane else 0.0
+        start = max(earliest, crane_start)
         end = start + v.service_duration_h
+        is_unplaced = start >= horizon_hours
 
         assignments.append(ScheduleAssignment(
             vessel_id=v.vessel_id,
-            berth_id=best.berth_id,
-            crane_id=assigned_crane.crane_id,
-            start_time=round(start, 2),
-            end_time=round(end, 2),
-            wait_time=round(max(0, start - v.arrival_time), 2),
-            delay=round(max(0, start - v.arrival_time), 2),
-            deferred=end > horizon_hours,
-            deferral_reason=("Exceeds planning horizon"
-                              if end > horizon_hours else ""),
+            berth_id=best.berth_id if not is_unplaced else "unassigned",
+            crane_id=assigned_crane.crane_id if (assigned_crane and not is_unplaced) else "unassigned",
+            start_time=round(start, 2) if not is_unplaced else 0.0,
+            end_time=round(end, 2) if not is_unplaced else 0.0,
+            wait_time=round(max(0.0, start - v.arrival_time), 2) if not is_unplaced else 0.0,
+            delay=round(max(0.0, start - v.arrival_time), 2) if not is_unplaced else 0.0,
+            deferred=is_unplaced,
+            deferral_reason="Exceeds planning horizon" if is_unplaced else ("Crosses horizon window" if end > horizon_hours else ""),
         ))
-        berth_next[best.berth_id] = end
-        crane_next[assigned_crane.crane_id] = end
+        if not is_unplaced:
+            berth_next[best.berth_id] = end
+            if assigned_crane:
+                crane_next[assigned_crane.crane_id] = end
 
-    kpis = _compute_kpis(assignments, vessels, horizon_hours)
+    kpis = _compute_kpis(assignments, vessels, berths, cranes, horizon_hours)
     return PlanResult(
         plan_type="FCFS",
         assignments=assignments,
@@ -140,11 +151,6 @@ def generate_optimized(
         vessels, berths, cranes, forecasts, horizon_hours)
 
     assignments = solver_result.assignments
-    # Ensure deferred vessels are flagged (horizon overflow)
-    for a in assignments:
-        if a.end_time > horizon_hours and not a.deferred:
-            a.deferred = True
-            a.deferral_reason = "Exceeds planning horizon"
 
     # Vessels not in assignments (deferred/solver dropped)
     assigned_ids = {a.vessel_id for a in assignments}
@@ -162,7 +168,7 @@ def generate_optimized(
                 deferral_reason="Not scheduled — solver could not place",
             ))
 
-    kpis = _compute_kpis(assignments, vessels, horizon_hours)
+    kpis = _compute_kpis(assignments, vessels, berths, cranes, horizon_hours)
     return PlanResult(
         plan_type="optimized",
         assignments=assignments,

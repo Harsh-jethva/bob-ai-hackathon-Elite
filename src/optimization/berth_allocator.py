@@ -344,21 +344,21 @@ def solve_berth_allocation(
 
                     wait = max(0.0, start_val - v.arrival_time)
                     total_wait += wait
-                    is_horizon_overflow = end_val > horizon_hours
+                    is_unplaced = start_val >= horizon_hours
 
-                    if is_horizon_overflow:
+                    if is_unplaced:
                         deferred_count += 1
 
                     assignments.append(ScheduleAssignment(
                         vessel_id=v_id,
-                        berth_id=assigned_berth_id,
-                        crane_id=assigned_crane_id,
-                        start_time=round(start_val, 2),
-                        end_time=round(end_val, 2),
-                        wait_time=round(wait, 2),
-                        delay=round(wait, 2),
-                        deferred=is_horizon_overflow,
-                        deferral_reason="Exceeds planning horizon" if is_horizon_overflow else "",
+                        berth_id=assigned_berth_id if not is_unplaced else "unassigned",
+                        crane_id=assigned_crane_id if not is_unplaced else "unassigned",
+                        start_time=round(start_val, 2) if not is_unplaced else 0.0,
+                        end_time=round(end_val, 2) if not is_unplaced else 0.0,
+                        wait_time=round(wait, 2) if not is_unplaced else 0.0,
+                        delay=round(wait, 2) if not is_unplaced else 0.0,
+                        deferred=is_unplaced,
+                        deferral_reason="Exceeds planning horizon" if is_unplaced else ("Crosses horizon window" if end_val > horizon_hours else ""),
                     ))
 
             # Sort assignments by start_time (or vessel arrival for unassigned)

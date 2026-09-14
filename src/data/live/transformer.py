@@ -19,8 +19,10 @@ def transform_live_vessels(
 
     for idx, av in enumerate(ais_vessels):
         vid = f"V-{av.imo[-4:]}"
-        # Compute baseline service duration based on cargo and crane productivity
-        base_dur = max(6.0, round(av.cargo_teu_estimate / (av.required_cranes * 35.0), 1))
+        # In container shipping, a port call exchange is ~5-15% of total vessel capacity (400-2,000 TEU)
+        port_call_teu = min(av.cargo_teu_estimate, max(450.0, av.cargo_teu_estimate * 0.08))
+        gross_crane_speed = max(1, av.required_cranes) * 28.0  # ~28 container moves per crane/hr
+        base_dur = min(24.0, max(6.0, round(port_call_teu / gross_crane_speed, 1)))
 
         # Check weather adjustment at destination
         dest_weather = weather_by_port.get(av.destination_port)
