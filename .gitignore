@@ -82,10 +82,7 @@ demo/*.mov
 demo/*.avi
 demo/*.mkv
 
-# ── Docker volumes / local data ───────────────────────────────────────────────
-data/
-logs/
-*.log
+
 
 # ── Jupyter Notebooks (optional: remove if you want to commit notebooks) ──────
 # .ipynb_checkpoints/
