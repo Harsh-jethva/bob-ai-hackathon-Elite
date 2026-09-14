@@ -81,13 +81,17 @@ def _solve_greedy_fallback(
     total_wait = 0.0
 
     for v in sorted_vessels:
+        target_port = v.preferred_port or v.destination_port
+        port_berths = [b for b in berths if b.port_id == target_port]
+        candidates = port_berths if port_berths else berths
+
         compatible_berths = [
-            b for b in berths
+            b for b in candidates
             if v.vessel_length_m <= b.max_vessel_length_m
             and v.vessel_draft_m <= b.max_vessel_draft_m
         ]
         if not compatible_berths:
-            compatible_berths = berths
+            compatible_berths = candidates
 
         best_berth = min(compatible_berths, key=lambda b: berth_next[b.berth_id])
         earliest_berth = max(v.arrival_time, berth_next[best_berth.berth_id])
@@ -111,30 +115,29 @@ def _solve_greedy_fallback(
         start = max(earliest_berth, earliest_crane)
         end = start + v.service_duration_h
 
-        deferred = end > horizon_hours
-        deferral_reason = ""
-        if deferred:
+        is_unplaced = start >= horizon_hours
+        if is_unplaced:
             deferred_count += 1
-            deferral_reason = "Exceeds planning horizon"
 
-        wait = max(0.0, start - v.arrival_time)
+        wait = max(0.0, start - v.arrival_time) if not is_unplaced else 0.0
         total_wait += wait
 
         assignments.append(ScheduleAssignment(
             vessel_id=v.vessel_id,
-            berth_id=best_berth.berth_id,
-            crane_id=assigned_cranes[0].crane_id if assigned_cranes else "C-1",
-            start_time=round(start, 2),
-            end_time=round(end, 2),
-            wait_time=round(wait, 2),
-            delay=round(wait, 2),
-            deferred=deferred,
-            deferral_reason=deferral_reason,
+            berth_id=best_berth.berth_id if not is_unplaced else "unassigned",
+            crane_id=assigned_cranes[0].crane_id if (assigned_cranes and not is_unplaced) else "unassigned",
+            start_time=round(start, 2) if not is_unplaced else 0.0,
+            end_time=round(end, 2) if not is_unplaced else 0.0,
+            wait_time=round(wait, 2) if not is_unplaced else 0.0,
+            delay=round(wait, 2) if not is_unplaced else 0.0,
+            deferred=is_unplaced,
+            deferral_reason="Exceeds planning horizon" if is_unplaced else ("Crosses horizon window" if end > horizon_hours else ""),
         ))
 
-        berth_next[best_berth.berth_id] = end
-        for c in assigned_cranes:
-            crane_next[c.crane_id] = end
+        if not is_unplaced:
+            berth_next[best_berth.berth_id] = end
+            for c in assigned_cranes:
+                crane_next[c.crane_id] = end
 
     runtime = time.time() - t0
     objective = total_wait * 10.0 + deferred_count * 1000.0

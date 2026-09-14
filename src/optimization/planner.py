@@ -87,11 +87,15 @@ def generate_fcfs(
     crane_next = {c.crane_id: 0.0 for c in cranes}
 
     for v in sorted(vessels, key=lambda x: x.arrival_time):
-        compatible = [b for b in berths
+        target_port = v.preferred_port or v.destination_port
+        port_berths = [b for b in berths if b.port_id == target_port]
+        candidates = port_berths if port_berths else berths
+
+        compatible = [b for b in candidates
                       if v.vessel_length_m <= b.max_vessel_length_m
                       and v.vessel_draft_m <= b.max_vessel_draft_m]
         if not compatible:
-            compatible = berths
+            compatible = candidates
         best = min(compatible, key=lambda b: berth_next[b.berth_id])
         earliest = max(v.arrival_time, berth_next[best.berth_id])
 
