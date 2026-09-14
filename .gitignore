@@ -83,11 +83,6 @@ demo/*.avi
 demo/*.mkv
 
 
-
-# ── Jupyter Notebooks (optional: remove if you want to commit notebooks) ──────
-# .ipynb_checkpoints/
-
-# ── Terraform ─────────────────────────────────────────────────────────────────
-.terraform/
-*.tfstate
-*.tfstate.backup
+# ── Scratch & Docs ────────────────────────────────────────────────────────────
+*.docx
+prd_extracted.txt
