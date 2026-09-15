@@ -90,7 +90,7 @@ For complete configuration and environment variable details, see [`docs/setup-gu
 
 ## 🎥 Demo
 
-- **Demo Video:** [YouTube Video Link]([https://youtu.be/x63HCoDfAhQ?si=KjwEHnFHtCRTG-E0](https://youtu.be/C2tQi5it9e0)) 
+- **Demo Video:** [YouTube Video Link](https://youtu.be/C2tQi5it9e0)
 - **Live Deployment:** [PortPilot AI Streamlit Cloud App](https://bob-ai-hackathon-elite-portpilot-ai.streamlit.app/) (Reference: [`demo/live-demo-url.txt`](demo/live-demo-url.txt))
 - **Slide Deck:** [`presentation/PortPilot_AI_Operations_Control.pdf`](presentation/PortPilot_AI_Operations_Control.pdf)
 - **Application Screenshots:** Located in [`demo/screenshots/`](demo/screenshots/):
