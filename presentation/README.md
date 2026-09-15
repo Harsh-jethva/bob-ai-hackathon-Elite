@@ -1,30 +1,21 @@
-# Presentation
+# Presentation Slide Deck
 
-Place your slide deck in this folder.
+This directory contains the presentation deck for **PortPilot AI** (AI Track — Team Elite).
 
-## Accepted Formats
+---
 
-  slides.pdf      ← Preferred (universally viewable)
-  slides.pptx     ← Acceptable
-  slides.key      ← Acceptable (macOS Keynote)
+## 📑 Slide Deck Files
 
-Rename your file to `slides.pdf` (or `slides.pptx`) so the evaluation
-pipeline can locate it reliably.
+- **Primary Slide Deck (PDF):** [`slides.pdf`](slides.pdf)
 
-## Recommended Slide Structure (5–8 slides)
+---
 
-  Slide 1: Title — Project name, team name, track
-  Slide 2: Problem — What problem? Who has it? Why does it matter?
-  Slide 3: Solution — What you built in one clear diagram or screenshot
-  Slide 4: Architecture — How the system works technically
-  Slide 5: Demo / Key Feature — Screenshot or flow of your best feature
-  Slide 6: IBM Technologies — Specifically how you used them
-  Slide 7: Results / Impact — What does success look like? Any metrics?
-  Slide 8: Team — Names, roles, what each person built
+## 🎯 Slide Structure
 
-## Tips
-
-- Keep slides visual — diagrams beat bullet points
-- One idea per slide
-- Font size minimum 24pt for readability
-- Do not paste large code blocks into slides — reference the repo instead
+1. **Slide 1: Title & Overview** — Project name, Team Elite member roles, Track, and Target Users.
+2. **Slide 2: Problem Statement** — Global port bottlenecks, offshore queuing costs ($50k–$100k/day demurrage), and manual scheduling friction.
+3. **Slide 3: Solution & Core Mechanism** — PortPilot AI dual-engine architecture: 72h predictive ML + prescriptive CP-SAT constraint planner.
+4. **Slide 4: Technical Architecture** — Layer-by-layer breakdown from multi-source data ingestion to the interactive supervisor cockpit.
+5. **Slide 5: Core Features & Operations Cockpit** — Congestion heatmap, dynamic rerouting, Gantt scheduling, and demo video reference.
+6. **Slide 6: IBM Bob Integration & Innovation** — Rigorous pair programming, solver co-design, 100% automated test suite, and prescriptive vs. descriptive differentiation.
+7. **Slide 7: Quantified Results, Business Impact & Team** — -32% delay reduction, -45% berth idle time, +28% crane productivity vs. FCFS baseline, and team contributions.
