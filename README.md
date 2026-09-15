@@ -8,11 +8,11 @@
 
 ## 👥 Team
 
-| Role | Name | Email |
-|---|---|---|
-| **Team Lead** | **Deep Tandel** | 24it098@charusat.edu.in |
-| **Team Member** | **Harsh Jethva** | 24it115@charusat.edu.in |
-| **Team Member** | **Dax Chauhan** | 24it007@charusat.edu.in |
+| Role            | Name               | Email                   |
+| --------------- | ------------------ | ----------------------- |
+| **Team Lead**   | **Deep Tandel**    | 24it098@charusat.edu.in |
+| **Team Member** | **Harsh Jethva**   | 24it115@charusat.edu.in |
+| **Team Member** | **Dax Chauhan**    | 24it007@charusat.edu.in |
 | **Team Member** | **Maulik Vaghela** | 24it105@charusat.edu.in |
 
 - **Team Name:** Elite
@@ -101,7 +101,6 @@ For complete configuration and environment variable details, see [`docs/setup-gu
   - `05-operational-alerts-hub.png` — Operational alerts hub (safety triggers, wind gusts & congestion warnings)
   - `06-schedule-export-diagnostics.png` — Schedule CSV/JSON export & CP-SAT solver diagnostics
 
-
 ---
 
 ## 🔍 Known Limitations
@@ -112,8 +111,8 @@ For complete configuration and environment variable details, see [`docs/setup-gu
 
 ---
 
-## 🏆 What We're Most Proud Of
+## 🏆 What We're Most Proud Of :
 
-We are most proud of **closing the loop between predictive forecasting and prescriptive optimization**. 
+We are most proud of **closing the loop between predictive forecasting and prescriptive optimization**.
 
 Most existing systems only provide descriptive analytics (showing where ships are) or passive predictions (showing congestion is coming). PortPilot AI takes the next vital step: using **Google OR-Tools CP-SAT constraint programming** to mathematically compute the optimal, actionable berth and crane allocation schedule in seconds, proving a **32% reduction in total vessel delay hours** and over **$140k in demurrage cost savings** compared to traditional FCFS port management.
