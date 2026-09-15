@@ -94,10 +94,13 @@ For complete configuration and environment variable details, see [`docs/setup-gu
 - **Deployment Status:** Local Streamlit Execution (Reference: [`demo/live-demo-url.txt`](demo/live-demo-url.txt))
 - **Slide Deck:** [`presentation/PortPilot_AI_Operations_Control.pdf`](presentation/PortPilot_AI_Operations_Control.pdf)
 - **Application Screenshots:** Located in [`demo/screenshots/`](demo/screenshots/):
-  - `01-home-dashboard.png` — Multi-port executive overview & KPI metrics
-  - `02-congestion-optimizer.png` — 72-hour congestion risk heatmap & rerouting advice
+  - `01-home-dashboard.png` — Multi-port executive overview & live MetOcean weather telemetry
+  - `02-congestion-optimizer.png` — Multi-criteria alternative port recommendation engine
   - `03-berth-gantt-schedule.png` — Constraint-optimized 72-hour Berth & Crane Gantt schedule
-  - `04-what-if-scenarios.png` — What-If scenario stress testing vs FCFS baseline
+  - `04-what-if-scenarios.png` — What-If scenario stress testing & FCFS benchmark
+  - `05-operational-alerts-hub.png` — Operational alerts hub (safety triggers, wind gusts & congestion warnings)
+  - `06-schedule-export-diagnostics.png` — Schedule CSV/JSON export & CP-SAT solver diagnostics
+
 
 ---
 
