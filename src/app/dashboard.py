@@ -4,6 +4,14 @@ Explainable Port Congestion Forecasting & Rolling 72-Hour Planning System.
 Launch: python -m streamlit run src/app/dashboard.py
 """
 
+import sys
+from pathlib import Path
+
+# Ensure project root is in sys.path for Streamlit Cloud deployment
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
 import io
 import csv
 import json
@@ -16,6 +24,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from src.data.generator import generate_scenario, Vessel, Berth, Crane, PortSpec
+
 from src.data.features import validate_vessels, validate_ports
 from src.models.congestion_model import (
     predict_congestion, CongestionLevel, _format_queue_display
