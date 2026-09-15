@@ -19,7 +19,8 @@ This directory contains evidence and artifacts showcasing the working functional
 
 ## 🌐 Live Deployment Status
 
-- **Status:** Local execution environment (Streamlit cockpit)
+- **Status:** Deployed Live on Streamlit Cloud
+- **Live URL:** [https://bob-ai-hackathon-elite-portpilot-ai.streamlit.app/](https://bob-ai-hackathon-elite-portpilot-ai.streamlit.app/)
 - **File Reference:** [`live-demo-url.txt`](live-demo-url.txt)
 - **Local Run Instructions:** See [`docs/setup-guide.md`](../docs/setup-guide.md)
 

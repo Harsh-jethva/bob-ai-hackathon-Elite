@@ -91,7 +91,7 @@ For complete configuration and environment variable details, see [`docs/setup-gu
 ## 🎥 Demo
 
 - **Demo Video:** [YouTube Video Link](https://youtu.be/x63HCoDfAhQ?si=KjwEHnFHtCRTG-E0) (Reference: [`demo/demo-video-link.txt`](demo/demo-video-link.txt))
-- **Deployment Status:** Local Streamlit Execution (Reference: [`demo/live-demo-url.txt`](demo/live-demo-url.txt))
+- **Live Deployment:** [PortPilot AI Streamlit Cloud App](https://bob-ai-hackathon-elite-portpilot-ai.streamlit.app/) (Reference: [`demo/live-demo-url.txt`](demo/live-demo-url.txt))
 - **Slide Deck:** [`presentation/PortPilot_AI_Operations_Control.pdf`](presentation/PortPilot_AI_Operations_Control.pdf)
 - **Application Screenshots:** Located in [`demo/screenshots/`](demo/screenshots/):
   - `01-home-dashboard.png` — Multi-port executive overview & live MetOcean weather telemetry
