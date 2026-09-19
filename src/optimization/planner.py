@@ -85,13 +85,20 @@ def _compute_vessel_schedule_cost(v: Vessel, a: ScheduleAssignment) -> Tuple[flo
         # Deferred penalty: heavy rescheduling + 24h holding + penalty
         holding = 24.0 * getattr(v, "holding_cost_per_hour_usd", 800.0)
         charter = 24.0 * (getattr(v, "vessel_daily_charter_usd", 25_000.0) / 24.0)
-        demurrage = 18.0 * getattr(v, "demurrage_rate_per_hour_usd", 1000.0)
+        demurrage = 18.0 * getattr(v, "demurrage_rate_per_hour_usd", 1200.0)
         deferral_penalty = 50_000.0
         return (demurrage, holding, charter, demurrage + holding + charter + deferral_penalty)
 
     wait_h = a.wait_time
-    laytime_free = 12.0
-    demurrage_h = max(0.0, wait_h - laytime_free)
+    laycan_end = getattr(v, "laycan_end_h", v.arrival_time + 12.0)
+    
+    # Contractual free laytime (standard 4.0h allowance)
+    free_laytime = getattr(v, "free_laytime_hours", 4.0)
+    demurrage_wait_h = max(0.0, wait_h - free_laytime)
+    
+    # Demurrage also triggers if service start time breaches contractual laycan deadline
+    demurrage_laycan_h = max(0.0, a.start_time - laycan_end)
+    demurrage_h = max(demurrage_wait_h, demurrage_laycan_h)
 
     demurrage = demurrage_h * getattr(v, "demurrage_rate_per_hour_usd", 1000.0)
     holding = wait_h * getattr(v, "holding_cost_per_hour_usd", 800.0)

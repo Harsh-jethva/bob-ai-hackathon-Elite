@@ -18,6 +18,12 @@ class PortSpec:
     diversion_cost_per_teu: float
     lat: float = 18.95
     lon: float = 72.85
+    # Port-Specific Penalties, Tariffs & Harbor Dues
+    port_dues_fixed_usd: float = 12000.0          # Fixed Port Entry & Harbor Navigation Dues
+    pilotage_tug_fee_usd: float = 5000.0          # Mandatory Pilotage & Tugboat Assist Fee
+    diversion_penalty_fixed_usd: float = 10000.0  # Customs / Manifest Alteration / Rerouting Penalty
+    crane_hourly_rate_usd: float = 350.0           # STS Quay Crane Hourly Tariff ($/crane-hour)
+    congestion_surcharge_usd: float = 6000.0      # Congestion surcharge if port wait > 6h
 
 
 @dataclass
@@ -288,43 +294,60 @@ PORT_CLUSTERS: Dict[str, Dict[str, Any]] = {
     "india": {
         "cluster_name": "🇮🇳 West Coast India Corridor (Mumbai & Gujarat Hubs)",
         "ports": [
-            PortSpec("P1", "Port of JNPT (Nhava Sheva / Mumbai)", 4, 6, 370.0, 15.0, 16.0, 0.88, 42.0, 60.0, 18.95, 72.95),
-            PortSpec("P2", "Mumbai Port (MbPA Harbor)",           3, 4, 300.0, 12.5, 18.0, 0.84, 39.0, 52.0, 18.93, 72.85),
-            PortSpec("P3", "Port of Hazira (Surat / Gujarat)",    3, 5, 340.0, 14.0, 15.0, 0.90, 40.0, 56.0, 21.10, 72.63),
-            PortSpec("P4", "Port of Mundra (Kutch / Gujarat)",    5, 8, 400.0, 16.5, 14.0, 0.92, 38.0, 55.0, 22.74, 69.70),
-            PortSpec("P5", "Deendayal Port (Kandla / Gujarat)",   4, 6, 360.0, 14.5, 16.0, 0.87, 36.0, 50.0, 23.01, 70.22),
+            PortSpec("P1", "Port of JNPT (Nhava Sheva / Mumbai)", 4, 6, 370.0, 15.0, 16.0, 0.88, 42.0, 60.0, 18.95, 72.95,
+                     port_dues_fixed_usd=16500.0, pilotage_tug_fee_usd=6200.0, diversion_penalty_fixed_usd=14000.0, crane_hourly_rate_usd=380.0, congestion_surcharge_usd=10000.0),
+            PortSpec("P2", "Mumbai Port (MbPA Harbor)",           3, 4, 300.0, 12.5, 18.0, 0.84, 39.0, 52.0, 18.93, 72.85,
+                     port_dues_fixed_usd=9500.0,  pilotage_tug_fee_usd=4800.0, diversion_penalty_fixed_usd=8500.0,  crane_hourly_rate_usd=330.0, congestion_surcharge_usd=6000.0),
+            PortSpec("P3", "Port of Hazira (Surat / Gujarat)",    3, 5, 340.0, 14.0, 15.0, 0.90, 40.0, 56.0, 21.10, 72.63,
+                     port_dues_fixed_usd=12000.0, pilotage_tug_fee_usd=5500.0, diversion_penalty_fixed_usd=9500.0,  crane_hourly_rate_usd=350.0, congestion_surcharge_usd=7500.0),
+            PortSpec("P4", "Port of Mundra (Kutch / Gujarat)",    5, 8, 400.0, 16.5, 14.0, 0.92, 38.0, 55.0, 22.74, 69.70,
+                     port_dues_fixed_usd=18000.0, pilotage_tug_fee_usd=7000.0, diversion_penalty_fixed_usd=12500.0, crane_hourly_rate_usd=390.0, congestion_surcharge_usd=8000.0),
+            PortSpec("P5", "Deendayal Port (Kandla / Gujarat)",   4, 6, 360.0, 14.5, 16.0, 0.87, 36.0, 50.0, 23.01, 70.22,
+                     port_dues_fixed_usd=10500.0, pilotage_tug_fee_usd=4200.0, diversion_penalty_fixed_usd=7000.0,  crane_hourly_rate_usd=310.0, congestion_surcharge_usd=5000.0),
         ],
     },
     "europe": {
         "cluster_name": "🇪🇺 European Mega-Hubs (Rotterdam / Antwerp / Hamburg)",
         "ports": [
-            PortSpec("P1", "Port of Rotterdam (Netherlands)", 5, 8, 400.0, 17.0, 14.0, 0.94, 50.0, 75.0, 51.92, 4.48),
-            PortSpec("P2", "Port of Antwerp (Belgium)",       4, 6, 380.0, 15.5, 16.0, 0.89, 48.0, 70.0, 51.22, 4.40),
-            PortSpec("P3", "Port of Hamburg (Germany)",       3, 5, 350.0, 14.5, 18.0, 0.86, 46.0, 68.0, 53.55, 9.99),
+            PortSpec("P1", "Port of Rotterdam (Netherlands)", 5, 8, 400.0, 17.0, 14.0, 0.94, 50.0, 75.0, 51.92, 4.48,
+                     port_dues_fixed_usd=26000.0, pilotage_tug_fee_usd=8500.0, diversion_penalty_fixed_usd=22000.0, crane_hourly_rate_usd=450.0, congestion_surcharge_usd=14000.0),
+            PortSpec("P2", "Port of Antwerp (Belgium)",       4, 6, 380.0, 15.5, 16.0, 0.89, 48.0, 70.0, 51.22, 4.40,
+                     port_dues_fixed_usd=21000.0, pilotage_tug_fee_usd=7200.0, diversion_penalty_fixed_usd=17500.0, crane_hourly_rate_usd=420.0, congestion_surcharge_usd=11000.0),
+            PortSpec("P3", "Port of Hamburg (Germany)",       3, 5, 350.0, 14.5, 18.0, 0.86, 46.0, 68.0, 53.55, 9.99,
+                     port_dues_fixed_usd=23500.0, pilotage_tug_fee_usd=7800.0, diversion_penalty_fixed_usd=19000.0, crane_hourly_rate_usd=410.0, congestion_surcharge_usd=12500.0),
         ],
     },
     "us_west": {
         "cluster_name": "🇺🇸 US West Coast Corridor (LA / Long Beach / Oakland)",
         "ports": [
-            PortSpec("P1", "Port of Los Angeles (California)",    4, 7, 400.0, 16.0, 15.0, 0.87, 55.0, 80.0, 33.74, -118.27),
-            PortSpec("P2", "Port of Long Beach (California)",     4, 6, 390.0, 15.5, 16.0, 0.88, 52.0, 78.0, 33.75, -118.22),
-            PortSpec("P3", "Port of Oakland (San Francisco Bay)", 3, 4, 340.0, 14.0, 18.0, 0.82, 48.0, 72.0, 37.80, -122.27),
+            PortSpec("P1", "Port of Los Angeles (California)",    4, 7, 400.0, 16.0, 15.0, 0.87, 55.0, 80.0, 33.74, -118.27,
+                     port_dues_fixed_usd=28000.0, pilotage_tug_fee_usd=9000.0, diversion_penalty_fixed_usd=25000.0, crane_hourly_rate_usd=480.0, congestion_surcharge_usd=16000.0),
+            PortSpec("P2", "Port of Long Beach (California)",     4, 6, 390.0, 15.5, 16.0, 0.88, 52.0, 78.0, 33.75, -118.22,
+                     port_dues_fixed_usd=27000.0, pilotage_tug_fee_usd=8800.0, diversion_penalty_fixed_usd=24000.0, crane_hourly_rate_usd=470.0, congestion_surcharge_usd=15000.0),
+            PortSpec("P3", "Port of Oakland (San Francisco Bay)", 3, 4, 340.0, 14.0, 18.0, 0.82, 48.0, 72.0, 37.80, -122.27,
+                     port_dues_fixed_usd=18500.0, pilotage_tug_fee_usd=6500.0, diversion_penalty_fixed_usd=16000.0, crane_hourly_rate_usd=400.0, congestion_surcharge_usd=10000.0),
         ],
     },
     "southeast_asia": {
         "cluster_name": "🇸🇬 Southeast Asia Straits (Singapore / Port Klang / PTP)",
         "ports": [
-            PortSpec("P1", "Port of Singapore (PSA)",           5, 8, 400.0, 17.5, 13.0, 0.95, 45.0, 65.0,  1.29, 103.85),
-            PortSpec("P2", "Port Klang (Malaysia)",             4, 6, 370.0, 15.0, 16.0, 0.86, 38.0, 55.0,  3.00, 101.40),
-            PortSpec("P3", "Port of Tanjung Pelepas (PTP)",    4, 6, 380.0, 16.0, 15.0, 0.89, 40.0, 58.0,  1.36, 103.55),
+            PortSpec("P1", "Port of Singapore (PSA)",           5, 8, 400.0, 17.5, 13.0, 0.95, 45.0, 65.0,  1.29, 103.85,
+                     port_dues_fixed_usd=22000.0, pilotage_tug_fee_usd=7500.0, diversion_penalty_fixed_usd=18000.0, crane_hourly_rate_usd=440.0, congestion_surcharge_usd=12000.0),
+            PortSpec("P2", "Port Klang (Malaysia)",             4, 6, 370.0, 15.0, 16.0, 0.86, 38.0, 55.0,  3.00, 101.40,
+                     port_dues_fixed_usd=13500.0, pilotage_tug_fee_usd=5000.0, diversion_penalty_fixed_usd=9000.0,  crane_hourly_rate_usd=340.0, congestion_surcharge_usd=6500.0),
+            PortSpec("P3", "Port of Tanjung Pelepas (PTP)",    4, 6, 380.0, 16.0, 15.0, 0.89, 40.0, 58.0,  1.36, 103.55,
+                     port_dues_fixed_usd=14000.0, pilotage_tug_fee_usd=5200.0, diversion_penalty_fixed_usd=9500.0,  crane_hourly_rate_usd=350.0, congestion_surcharge_usd=7000.0),
         ],
     },
     "global_demo": {
         "cluster_name": "🌐 Global Demo Ports (Alpha / Beta / Gamma)",
         "ports": [
-            PortSpec("P1", "Port Alpha", 3, 5, 350.0, 12.0, 18.0, 0.85, 45.0, 65.0, 18.95,  72.85),
-            PortSpec("P2", "Port Beta",  2, 4, 300.0, 10.0, 22.0, 0.70, 38.0, 55.0,  1.29, 103.85),
-            PortSpec("P3", "Port Gamma", 4, 6, 400.0, 14.0, 16.0, 0.90, 50.0, 75.0, 51.92,   4.48),
+            PortSpec("P1", "Port Alpha", 3, 5, 350.0, 12.0, 18.0, 0.85, 45.0, 65.0, 18.95,  72.85,
+                     port_dues_fixed_usd=15000.0, pilotage_tug_fee_usd=5500.0, diversion_penalty_fixed_usd=12000.0, crane_hourly_rate_usd=360.0, congestion_surcharge_usd=8000.0),
+            PortSpec("P2", "Port Beta",  2, 4, 300.0, 10.0, 22.0, 0.70, 38.0, 55.0,  1.29, 103.85,
+                     port_dues_fixed_usd=11000.0, pilotage_tug_fee_usd=4500.0, diversion_penalty_fixed_usd=8000.0,  crane_hourly_rate_usd=320.0, congestion_surcharge_usd=5000.0),
+            PortSpec("P3", "Port Gamma", 4, 6, 400.0, 14.0, 16.0, 0.90, 50.0, 75.0, 51.92,   4.48,
+                     port_dues_fixed_usd=20000.0, pilotage_tug_fee_usd=7000.0, diversion_penalty_fixed_usd=16000.0, crane_hourly_rate_usd=420.0, congestion_surcharge_usd=10000.0),
         ],
     },
 }

@@ -15,6 +15,7 @@ if str(root_dir) not in sys.path:
 import io
 import csv
 import json
+import copy
 from typing import List, Dict, Any
 
 import streamlit as st
@@ -180,6 +181,7 @@ def _build_gantt_chart(
     horizon_hours=72.0,
     occupied_berths=None,       # list of OccupiedBerth objects for the selected port
     port_berth_ids=None,        # set of berth IDs for this port
+    title="<b>Berth Occupancy Timeline (72-Hour Horizon)</b>",
 ):
     """Build Gantt chart including pre-existing occupied berths as grey blocks."""
     base_time = datetime(2026, 9, 15, 0, 0)
@@ -237,7 +239,7 @@ def _build_gantt_chart(
         color="Priority",
         hover_name="Vessel",
         hover_data={"Start_H": ":.1f", "End_H": ":.1f", "Wait": True, "Berth": True, "Start": False, "End": False},
-        title="<b>Berth Occupancy Timeline (72-Hour Horizon)</b>",
+        title=title,
         category_orders={"Priority": ["Already Docked", "Priority 1", "Priority 2", "Priority 3"]},
         color_discrete_map={
             "Already Docked": "#94A3B8",   # grey for pre-existing ships
@@ -565,8 +567,17 @@ def main():
     selected_live_state: PortLiveState = get_live_state(selected_cluster_key, selected_port_id)
 
     # ── Filter berths, cranes, vessels for selected port ────────────────────
-    port_berths = [b for b in berths if b.port_id == selected_port_id]
-    port_cranes = [c for c in cranes if c.port_id == selected_port_id]
+    port_berths = [copy.copy(b) for b in berths if b.port_id == selected_port_id]
+    port_cranes = [copy.copy(c) for c in cranes if c.port_id == selected_port_id]
+    
+    # Initialize berth and crane availability from live state (docked ships)
+    occ_map = {ob.berth_id: ob.free_at_hours for ob in selected_live_state.occupied_berths}
+    for b in port_berths:
+        b.available_from = occ_map.get(b.berth_id, 0.0)
+    
+    for c in port_cranes:
+        c.available_from = selected_live_state.crane_busy_until.get(c.crane_id, 0.0)
+
     port_berth_ids = {b.berth_id for b in port_berths}
 
     # Vessels headed to or preferred at the selected port
@@ -574,12 +585,15 @@ def main():
         v for v in vessels
         if v.preferred_port == selected_port_id or v.destination_port == selected_port_id
     ]
-    # Fallback: if no vessels match, show a subset of all vessels targeting this port
-    if len(port_vessels) < 2:
-        port_vessels = vessels[:max(5, num_vessels // len(ports))]
-        for v in port_vessels:
-            v.preferred_port = selected_port_id
-            v.destination_port = selected_port_id
+    # Ensure sufficient incoming fleet for meaningful berth contention and priority scheduling
+    min_fleet_size = max(5, num_vessels // len(ports))
+    if len(port_vessels) < min_fleet_size:
+        other_candidates = [v for v in vessels if v not in port_vessels]
+        for v in other_candidates[:(min_fleet_size - len(port_vessels))]:
+            v_copy = copy.copy(v)
+            v_copy.preferred_port = selected_port_id
+            v_copy.destination_port = selected_port_id
+            port_vessels.append(v_copy)
 
     vessels_by_id = {v.vessel_id: v for v in vessels}
 
@@ -616,24 +630,8 @@ def main():
     st.markdown("## 🏗️ Port Status Dashboard")
     _render_port_status_card(selected_port_spec, selected_live_state, berths, cranes)
 
-    # ── Top Overview KPIs (fleet-wide) ───────────────────────────────────────
     forecasts = predict_congestion(vessels, berths, cranes, horizon)
     port_forecast = next((f for f in forecasts if f.port_id == selected_port_id), None)
-    avg_berth_util = sum(f.berth_utilization for f in forecasts) / max(len(forecasts), 1)
-    high_cong_count = sum(1 for f in forecasts if f.congestion_level in (CongestionLevel.HIGH, CongestionLevel.CRITICAL))
-
-    st.markdown("#### 📊 Fleet-Wide Overview KPIs")
-    col_k1, col_k2, col_k3, col_k4, col_k5 = st.columns(5)
-    with col_k1:
-        st.metric("Total Vessels", f"{len(vessels)} ships", delta="Live AIS" if is_live_mode else scenario_name)
-    with col_k2:
-        st.metric("Active Berths", f"{len(berths)} berths across {len(ports)} ports")
-    with col_k3:
-        st.metric("Operational Cranes", f"{len(cranes)} cranes")
-    with col_k4:
-        st.metric("Congestion Pressure", f"{high_cong_count} Hotspot(s)", delta_color="inverse", delta="Critical/High" if high_cong_count > 0 else "Normal")
-    with col_k5:
-        st.metric("Mean Berth Load", f"{avg_berth_util:.0%}")
 
     # Selected port KPIs
     if port_forecast:
@@ -882,18 +880,19 @@ def main():
                 delta=f"FCFS: ${comparison.fcfs_charter_usd:,.0f} → Opt: ${comparison.opt_charter_usd:,.0f}",
             )
 
-        # Cost Breakdown Side-by-Side Chart
-        col_ch1, col_ch2 = st.columns([3, 2])
-        with col_ch1:
+        # ── Comparative Analytics Graphs (Graph 1: Cost, Graph 2: Wait Time by Tier) ──
+        st.markdown("##### 📊 Comparative Performance Graphs (FCFS vs. Priority Algorithm)")
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
             cost_comp_df = pd.DataFrame([
                 {
-                    "Scheduling Strategy": "Baseline (FCFS)",
+                    "Scheduling Strategy": "FCFS Baseline",
                     "Demurrage Penalties ($)": comparison.fcfs_demurrage_usd,
                     "Cargo Holding Cost ($)": comparison.fcfs_holding_usd,
                     "Vessel Idle Charter OPEX ($)": comparison.fcfs_charter_usd,
                 },
                 {
-                    "Scheduling Strategy": "Priority Optimized (CP-SAT)",
+                    "Scheduling Strategy": "Priority Optimized",
                     "Demurrage Penalties ($)": comparison.opt_demurrage_usd,
                     "Cargo Holding Cost ($)": comparison.opt_holding_usd,
                     "Vessel Idle Charter OPEX ($)": comparison.opt_charter_usd,
@@ -903,20 +902,39 @@ def main():
                 cost_comp_df,
                 x="Scheduling Strategy",
                 y=["Demurrage Penalties ($)", "Cargo Holding Cost ($)", "Vessel Idle Charter OPEX ($)"],
-                title="<b>Total Port Call Schedule Cost Breakdown: FCFS vs. Priority Optimized</b>",
+                title="<b>Graph 1: Financial Schedule Cost Breakdown (USD)</b>",
                 barmode="stack",
                 color_discrete_sequence=["#EF4444", "#F59E0B", "#3B82F6"],
             )
             fig_p_cost.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), legend_title="Cost Category")
             st.plotly_chart(fig_p_cost, use_container_width=True)
 
-        with col_ch2:
-            st.markdown("##### 💡 Key Financial Takeaways")
-            with st.container(border=True):
-                st.write(f"• **Net Economic Advantage:** Priority scheduling creates **${comparison.net_savings_usd:,.0f}** in net bottom-line efficiency across the fleet.")
-                st.write(f"• **Demurrage Avoidance:** **${comparison.demurrage_saved_usd:,.0f}** saved by eliminating contractual deadline penalties on high-risk vessels.")
-                st.write(f"• **Cargo Value Protection:** **${comparison.holding_saved_usd:,.0f}** in holding and depreciation costs preserved for premium perishables & pharma.")
-                st.write(f"• **Solver Efficiency:** Optimal CP-SAT allocation completed in **{opt_p.runtime_seconds:.3f} seconds**.")
+        with col_g2:
+            wait_comp_df = pd.DataFrame([
+                {"Priority Tier": "🔴 P1 (Urgent)", "FCFS Baseline (h)": fcfs_p.p1_avg_wait_hours, "Priority Optimized (h)": opt_p.p1_avg_wait_hours},
+                {"Priority Tier": "🟡 P2 (High Value)", "FCFS Baseline (h)": fcfs_p.p2_avg_wait_hours, "Priority Optimized (h)": opt_p.p2_avg_wait_hours},
+                {"Priority Tier": "🔵 P3 (Standard)", "FCFS Baseline (h)": fcfs_p.p3_avg_wait_hours, "Priority Optimized (h)": opt_p.p3_avg_wait_hours},
+            ])
+            fig_p_wait = px.bar(
+                wait_comp_df,
+                x="Priority Tier",
+                y=["FCFS Baseline (h)", "Priority Optimized (h)"],
+                title="<b>Graph 2: Average Vessel Waiting Time by Priority Tier (Hours)</b>",
+                barmode="group",
+                color_discrete_sequence=["#94A3B8", "#10B981"],
+            )
+            fig_p_wait.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), legend_title="Strategy")
+            st.plotly_chart(fig_p_wait, use_container_width=True)
+
+        # Key Financial & Operational Takeaways
+        with st.container(border=True):
+            t_c1, t_c2 = st.columns(2)
+            with t_c1:
+                st.write(f"• **Net Financial Advantage:** Priority scheduling generates **${comparison.net_savings_usd:,.0f}** in net bottom-line efficiency across the fleet.")
+                st.write(f"• **Demurrage Avoidance:** **${comparison.demurrage_saved_usd:,.0f}** saved by clearing high-risk laycan deadlines first.")
+            with t_c2:
+                st.write(f"• **Cargo Value Preservation:** **${comparison.holding_saved_usd:,.0f}** saved on cold-chain & high-value electronics holding loss.")
+                st.write(f"• **P1 Service Speedup:** Critical vessels wait **{comparison.p1_wait_reduction_h:.1f} fewer hours** on average.")
 
         # ── 3. VESSEL-BY-VESSEL PROFIT / LOSS TABLE ──────────────────────────
         st.markdown("#### 📊 3. Vessel-by-Vessel Profit / Loss & Savings Detailed Ledger")
@@ -942,17 +960,42 @@ def main():
         else:
             st.info("No vessel comparison records available.")
 
-        # ── 4. BERTH ALLOCATION GANTT ────────────────────────────────────────
-        st.markdown("#### 📅 4. Berth Allocation Gantt Timeline (72-Hour Horizon)")
-        st.caption("Visual Gantt chart displaying berth occupancy over the 72-hour planning window. Grey blocks = vessels already docked; colored blocks = optimized arrivals.")
-        fig_gantt = _build_gantt_chart(
+        # ── 4. BERTH ALLOCATION GANTT TIMELINES (FCFS VS PRIORITY) ───────────
+        st.markdown("#### 📅 4. Berth Allocation Gantt Timeline Graphs: FCFS vs. Priority Algorithm")
+        st.caption("Compare how berths are utilized over the 72-hour horizon under both algorithms. Notice how the Priority Optimizer eliminates delays on critical P1 vessels.")
+
+        gantt_subtabs = st.tabs([
+            "🚀 Graph A: Priority-Optimized Berth Timeline (CP-SAT)",
+            "⏱️ Graph B: Baseline FCFS Berth Timeline (Arrival Order)",
+            "📊 Side-by-Side Dual Gantt Comparison",
+        ])
+
+        fig_gantt_opt = _build_gantt_chart(
             opt_p.assignments,
             vessels_by_id,
             horizon,
             occupied_berths=selected_live_state.occupied_berths,
             port_berth_ids=port_berth_ids,
+            title="<b>Priority-Optimized Berth Schedule (CP-SAT Multi-Factor)</b>",
         )
-        st.plotly_chart(fig_gantt, use_container_width=True)
+        fig_gantt_fcfs = _build_gantt_chart(
+            fcfs_p.assignments,
+            vessels_by_id,
+            horizon,
+            occupied_berths=selected_live_state.occupied_berths,
+            port_berth_ids=port_berth_ids,
+            title="<b>Baseline FCFS Berth Schedule (Arrival Order)</b>",
+        )
+
+        with gantt_subtabs[0]:
+            st.plotly_chart(fig_gantt_opt, use_container_width=True, key="gantt_opt_single")
+        with gantt_subtabs[1]:
+            st.plotly_chart(fig_gantt_fcfs, use_container_width=True, key="gantt_fcfs_single")
+        with gantt_subtabs[2]:
+            st.markdown("##### 🚀 1. Priority-Optimized Berth Schedule")
+            st.plotly_chart(fig_gantt_opt, use_container_width=True, key="gantt_opt_dual")
+            st.markdown("##### ⏱️ 2. Baseline FCFS Berth Schedule")
+            st.plotly_chart(fig_gantt_fcfs, use_container_width=True, key="gantt_fcfs_dual")
 
         # ── 5. DETAILED BERTH & CRANE ASSIGNMENT TABLE ────────────────────────
         st.markdown("#### 📋 5. Detailed Berth & Crane Assignment Schedule Table")
@@ -1003,6 +1046,27 @@ def main():
             "evaluates full voyage economics (extra distance, bunker fuel burn, port charges, demurrage), "
             "and only recommends diversion when operationally feasible and financially justified."
         )
+
+        # ── Port Penalties & Tariffs Profile Matrix ──────────────────────────
+        with st.expander("🏛️ Regional Port Tariffs, Harbor Dues & Diversion Penalties Matrix", expanded=True):
+            st.caption(
+                "Every port enforces distinct operational cost schedules: **Fixed Harbor Dues**, "
+                "**Mandatory Pilotage & Tugboat Assist**, **Customs Manifest Alteration / Diversion Penalties**, "
+                "**TEU Handling Charges**, **STS Quay Crane Hourly Tariffs**, and **Congestion Peak Surcharges**."
+            )
+            port_tariff_rows = []
+            for p in ports:
+                port_tariff_rows.append({
+                    "Port ID": p.port_id,
+                    "Port Name": p.port_name,
+                    "Fixed Harbor Dues": f"${getattr(p, 'port_dues_fixed_usd', 12000.0):,.0f}",
+                    "Pilotage & Tug Fee": f"${getattr(p, 'pilotage_tug_fee_usd', 5000.0):,.0f}",
+                    "Diversion Penalty": f"${getattr(p, 'diversion_penalty_fixed_usd', 10000.0):,.0f}",
+                    "Handling Tariff": f"${p.handling_cost_per_teu:.2f} / TEU",
+                    "Quay Crane Tariff": f"${getattr(p, 'crane_hourly_rate_usd', 350.0):,.0f} / h",
+                    "Congestion Surcharge": f"${getattr(p, 'congestion_surcharge_usd', 6000.0):,.0f}",
+                })
+            st.dataframe(pd.DataFrame(port_tariff_rows), use_container_width=True, hide_index=True)
 
         # ── Target Port & Vessel Selection ────────────────────────────────────
         tp_col1, tp_col2 = st.columns([1, 1])
@@ -1125,12 +1189,15 @@ def main():
         with st.expander("🧾 View Target Port Itemized Financial Breakdown", expanded=True):
             cb = t_ana.cost_breakdown
             cb_df = pd.DataFrame([
+                {"Cost Component": "Fixed Port Harbor Dues", "Details": f"Navigation channel & berth dues at {eval_target_port.port_name}", "Amount (USD)": f"${cb.port_dues_cost:,.2f}"},
+                {"Cost Component": "Pilotage & Tugboat Assist", "Details": "Mandatory harbor channel pilotage and tugboat assist", "Amount (USD)": f"${cb.pilotage_tug_cost:,.2f}"},
                 {"Cost Component": "Vessel Waiting OPEX (Charter)", "Details": f"{cb.wait_hours:.1f}h waiting @ ${custom_cost_params.vessel_daily_cost_usd:,.0f}/day", "Amount (USD)": f"${cb.wait_opex_cost:,.2f}"},
                 {"Cost Component": "Auxiliary Bunker Fuel at Anchor", "Details": f"{cb.wait_hours:.1f}h @ {custom_cost_params.fuel_consumption_idle_mt_day} MT/day (${custom_cost_params.bunker_price_vlsfo_usd_mt:.0f}/MT)", "Amount (USD)": f"${cb.wait_idle_fuel_cost:,.2f}"},
                 {"Cost Component": "Contractual Demurrage Charges", "Details": f"{max(0.0, cb.wait_hours - custom_cost_params.free_laytime_hours):.1f}h excess wait beyond {custom_cost_params.free_laytime_hours:.0f}h laytime", "Amount (USD)": f"${cb.demurrage_cost:,.2f}"},
                 {"Cost Component": "Terminal Handling Tariff", "Details": f"{eval_vessel.cargo_volume:,.0f} TEU @ ${eval_target_port.handling_cost_per_teu:.2f}/TEU", "Amount (USD)": f"${cb.port_handling_cost:,.2f}"},
-                {"Cost Component": "STS Crane Operating Charges", "Details": f"{eval_vessel.service_duration_h:.1f}h × {max(1, eval_vessel.required_cranes)} cranes @ ${custom_cost_params.crane_rate_per_hour_usd:.0f}/h", "Amount (USD)": f"${cb.crane_operating_cost:,.2f}"},
-                {"Cost Component": "TOTAL ESTIMATED CALL COST", "Details": "Sum of all waiting, fuel, demurrage, and port handling costs", "Amount (USD)": f"${cb.total_target_cost:,.2f}"},
+                {"Cost Component": "STS Crane Operating Charges", "Details": f"{eval_vessel.service_duration_h:.1f}h × {max(1, eval_vessel.required_cranes)} cranes @ ${getattr(eval_target_port, 'crane_hourly_rate_usd', custom_cost_params.crane_rate_per_hour_usd):,.0f}/h", "Amount (USD)": f"${cb.crane_operating_cost:,.2f}"},
+                {"Cost Component": "Port Congestion Surcharge", "Details": f"{'Applied for queue delay > 6h' if cb.congestion_surcharge_cost > 0 else 'Zero (minimal queue)'}", "Amount (USD)": f"${cb.congestion_surcharge_cost:,.2f}"},
+                {"Cost Component": "TOTAL ESTIMATED CALL COST", "Details": "Sum of all port dues, pilotage, waiting, fuel, demurrage, and handling tariffs", "Amount (USD)": f"${cb.total_target_cost:,.2f}"},
             ])
             st.dataframe(cb_df, use_container_width=True, hide_index=True)
 
@@ -1174,7 +1241,7 @@ def main():
         st.markdown("#### 3️⃣ Feasible Nearby Alternative Ports — Voyage & Economic Comparison")
         st.caption(
             "Every alternative port is evaluated against vessel physical constraints (draft & length), "
-            "additional sailing distance, transit bunker fuel cost, expected port waiting queue, and net bottom-line financial savings."
+            "additional sailing distance, transit bunker fuel cost, port-specific diversion penalties, harbor dues, expected port waiting queue, and net financial savings."
         )
 
         if not opt_res.alternatives:
@@ -1198,7 +1265,9 @@ def main():
                                 st.warning(f"**{alt.summary_verdict}**")
 
                             st.write(f"📍 **Transit:** {alt.distance_nm:.0f} NM ({dc.extra_sailing_hours:.1f}h)")
-                            st.write(f"⛽ **Extra Bunker:** {dc.extra_sailing_fuel_mt:.1f} MT (${dc.extra_sailing_fuel_cost:,.0f})")
+                            st.write(f"⛽ **Extra Bunker & OPEX:** ${dc.extra_sailing_fuel_cost + dc.extra_sailing_opex_cost:,.0f}")
+                            st.write(f"⚖️ **Diversion Penalty:** ${dc.diversion_tariff_cost:,.0f}")
+                            st.write(f"⚓ **Harbor Dues & Pilotage:** ${dc.port_dues_cost_alt + dc.pilotage_tug_cost_alt:,.0f}")
                             st.write(f"⏳ **Expected Port Wait:** {alt.expected_wait_hours:.1f} hours")
                             st.write(f"💰 **Total Diversion Cost:** ${dc.total_diversion_cost:,.0f}")
 
@@ -1220,10 +1289,12 @@ def main():
             st.markdown("#### 📊 Comparative Financial Modeling: Target Port vs Alternatives")
             comp_rows = [{
                 "Port": f"🎯 {eval_target_port.port_name} (Target)",
-                "Transit Fuel ($)": 0.0,
+                "Transit Fuel & OPEX ($)": 0.0,
+                "Diversion Penalty ($)": 0.0,
+                "Port Dues & Pilotage ($)": t_ana.cost_breakdown.port_dues_cost + t_ana.cost_breakdown.pilotage_tug_cost,
                 "Waiting OPEX ($)": t_ana.cost_breakdown.wait_opex_cost,
                 "Demurrage ($)": t_ana.cost_breakdown.demurrage_cost,
-                "Port & Crane Tariffs ($)": t_ana.cost_breakdown.port_handling_cost + t_ana.cost_breakdown.crane_operating_cost,
+                "Handling & Crane Tariffs ($)": t_ana.cost_breakdown.port_handling_cost + t_ana.cost_breakdown.crane_operating_cost,
                 "Anchor Fuel ($)": t_ana.cost_breakdown.wait_idle_fuel_cost,
             }]
 
@@ -1232,10 +1303,12 @@ def main():
                     dc = alt.diversion_cost
                     comp_rows.append({
                         "Port": f"⚓ {alt.candidate_port.port_name}",
-                        "Transit Fuel ($)": dc.extra_sailing_fuel_cost,
-                        "Waiting OPEX ($)": dc.wait_opex_cost_alt + dc.extra_sailing_opex_cost,
+                        "Transit Fuel & OPEX ($)": dc.extra_sailing_fuel_cost + dc.extra_sailing_opex_cost,
+                        "Diversion Penalty ($)": dc.diversion_tariff_cost,
+                        "Port Dues & Pilotage ($)": dc.port_dues_cost_alt + dc.pilotage_tug_cost_alt,
+                        "Waiting OPEX ($)": dc.wait_opex_cost_alt,
                         "Demurrage ($)": dc.demurrage_cost_alt,
-                        "Port & Crane Tariffs ($)": dc.port_handling_cost_alt + dc.diversion_tariff_cost + dc.crane_operating_cost_alt,
+                        "Handling & Crane Tariffs ($)": dc.port_handling_cost_alt + dc.crane_operating_cost_alt,
                         "Anchor Fuel ($)": dc.wait_idle_fuel_cost_alt,
                     })
 
@@ -1243,12 +1316,12 @@ def main():
             fig_cost = px.bar(
                 df_cost_comp,
                 x="Port",
-                y=["Transit Fuel ($)", "Waiting OPEX ($)", "Demurrage ($)", "Port & Crane Tariffs ($)", "Anchor Fuel ($)"],
+                y=["Transit Fuel & OPEX ($)", "Diversion Penalty ($)", "Port Dues & Pilotage ($)", "Waiting OPEX ($)", "Demurrage ($)", "Handling & Crane Tariffs ($)", "Anchor Fuel ($)"],
                 title="<b>Total Voyage & Port Call Cost Component Comparison (USD)</b>",
                 barmode="stack",
-                color_discrete_sequence=["#F59E0B", "#EF4444", "#DC2626", "#3B82F6", "#8B5CF6"],
+                color_discrete_sequence=["#F59E0B", "#DC2626", "#6366F1", "#EF4444", "#991B1B", "#3B82F6", "#8B5CF6"],
             )
-            fig_cost.update_layout(height=340, margin=dict(l=20, r=20, t=40, b=20), legend_title="Cost Component")
+            fig_cost.update_layout(height=360, margin=dict(l=20, r=20, t=40, b=20), legend_title="Cost Component")
             st.plotly_chart(fig_cost, use_container_width=True)
 
             # Detailed Comparative Data Table
@@ -1259,8 +1332,9 @@ def main():
                     table_rows.append({
                         "Candidate Port": alt.candidate_port.port_name,
                         "Extra Dist (NM)": f"{alt.distance_nm:.0f} NM",
-                        "Transit Fuel (MT)": f"{dc.extra_sailing_fuel_mt:.1f} MT",
-                        "Extra Fuel Cost": f"${dc.extra_sailing_fuel_cost:,.0f}",
+                        "Transit Cost": f"${dc.extra_sailing_fuel_cost + dc.extra_sailing_opex_cost:,.0f}",
+                        "Diversion Penalty": f"${dc.diversion_tariff_cost:,.0f}",
+                        "Harbor Dues & Pilotage": f"${dc.port_dues_cost_alt + dc.pilotage_tug_cost_alt:,.0f}",
                         "Port Wait (h)": f"{alt.expected_wait_hours:.1f}h",
                         "Demurrage Cost": f"${dc.demurrage_cost_alt:,.0f}",
                         "Total Voyage Cost": f"${dc.total_diversion_cost:,.0f}",

@@ -39,6 +39,9 @@ class TargetPortCost:
     demurrage_cost: float
     port_handling_cost: float
     crane_operating_cost: float
+    port_dues_cost: float
+    pilotage_tug_cost: float
+    congestion_surcharge_cost: float
     total_target_cost: float
 
 
@@ -58,6 +61,10 @@ class DiversionCost:
     demurrage_cost_alt: float
     port_handling_cost_alt: float
     diversion_tariff_cost: float
+    port_dues_cost_alt: float
+    pilotage_tug_cost_alt: float
+    fixed_diversion_penalty: float
+    congestion_surcharge_cost_alt: float
     crane_operating_cost_alt: float
     total_diversion_cost: float
     net_cost_difference: float           # Positive = SAVINGS if diverting, Negative = LOSS
@@ -92,10 +99,29 @@ def compute_target_port_cost(
     # 4. Port terminal handling charges based on cargo TEU
     port_handling = vessel.cargo_volume * target_port.handling_cost_per_teu
 
-    # 5. STS crane operational hours tariff
-    crane_cost = service_hours * cranes * params.crane_rate_per_hour_usd
+    # 5. STS crane operational hours tariff (port specific)
+    crane_rate = getattr(target_port, "crane_hourly_rate_usd", params.crane_rate_per_hour_usd)
+    crane_cost = service_hours * cranes * crane_rate
 
-    total_cost = wait_opex + wait_idle_fuel + demurrage_cost + port_handling + crane_cost
+    # 6. Fixed Port Entry & Harbor Dues
+    port_dues = getattr(target_port, "port_dues_fixed_usd", 12000.0)
+
+    # 7. Pilotage & Tugboat Assist Fee
+    pilotage_fee = getattr(target_port, "pilotage_tug_fee_usd", 5000.0)
+
+    # 8. Congestion Surcharge (incurred if port wait exceeds 6 hours)
+    cong_surcharge = getattr(target_port, "congestion_surcharge_usd", 6000.0) if wait_hours > 6.0 else 0.0
+
+    total_cost = (
+        wait_opex
+        + wait_idle_fuel
+        + demurrage_cost
+        + port_handling
+        + crane_cost
+        + port_dues
+        + pilotage_fee
+        + cong_surcharge
+    )
 
     return TargetPortCost(
         port_id=target_port.port_id,
@@ -107,6 +133,9 @@ def compute_target_port_cost(
         demurrage_cost=round(demurrage_cost, 2),
         port_handling_cost=round(port_handling, 2),
         crane_operating_cost=round(crane_cost, 2),
+        port_dues_cost=round(port_dues, 2),
+        pilotage_tug_cost=round(pilotage_fee, 2),
+        congestion_surcharge_cost=round(cong_surcharge, 2),
         total_target_cost=round(total_cost, 2),
     )
 
@@ -144,12 +173,23 @@ def compute_diversion_cost(
 
     # 4. Port handling and tariff charges at alternative
     port_handling_alt = vessel.cargo_volume * candidate_port.handling_cost_per_teu
-    # Diversion customs/documentation surcharge per TEU
-    diversion_tariff = vessel.cargo_volume * (candidate_port.diversion_cost_per_teu * 0.15)
 
-    # 5. Crane costs at alternative
+    # 5. Fixed and per-TEU diversion penalty for administrative/manifest alteration
+    fixed_div_penalty = getattr(candidate_port, "diversion_penalty_fixed_usd", 10000.0)
+    teu_div_surcharge = vessel.cargo_volume * (candidate_port.diversion_cost_per_teu * 0.15)
+    total_diversion_penalty = fixed_div_penalty + teu_div_surcharge
+
+    # 6. Harbor Dues and Pilotage/Tugboat Assist at Alternative Port
+    port_dues_alt = getattr(candidate_port, "port_dues_fixed_usd", 12000.0)
+    pilotage_alt = getattr(candidate_port, "pilotage_tug_fee_usd", 5000.0)
+
+    # 7. Congestion surcharge at alternative port
+    cong_surcharge_alt = getattr(candidate_port, "congestion_surcharge_usd", 6000.0) if wait_hours_at_alt > 6.0 else 0.0
+
+    # 8. Crane costs at alternative (port specific)
     cranes = max(1, vessel.required_cranes)
-    crane_cost_alt = vessel.service_duration_h * cranes * params.crane_rate_per_hour_usd
+    crane_rate_alt = getattr(candidate_port, "crane_hourly_rate_usd", params.crane_rate_per_hour_usd)
+    crane_cost_alt = vessel.service_duration_h * cranes * crane_rate_alt
 
     total_div_cost = (
         extra_fuel_cost
@@ -158,16 +198,16 @@ def compute_diversion_cost(
         + wait_idle_fuel_alt
         + demurrage_alt
         + port_handling_alt
-        + diversion_tariff
+        + total_diversion_penalty
+        + port_dues_alt
+        + pilotage_alt
+        + cong_surcharge_alt
         + crane_cost_alt
     )
 
     # Net difference: if target_cost > total_div_cost, diverting saves money!
     net_diff = target_cost.total_target_cost - total_div_cost
 
-    # Total operational time comparison:
-    # Target: wait_hours + service_hours
-    # Alternative: extra_sailing_hours + wait_hours_at_alt + service_hours
     target_total_hours = target_cost.wait_hours + vessel.service_duration_h
     alt_total_hours = extra_sailing_h + wait_hours_at_alt + vessel.service_duration_h
     time_diff_h = target_total_hours - alt_total_hours
@@ -187,7 +227,11 @@ def compute_diversion_cost(
         wait_idle_fuel_cost_alt=round(wait_idle_fuel_alt, 2),
         demurrage_cost_alt=round(demurrage_alt, 2),
         port_handling_cost_alt=round(port_handling_alt, 2),
-        diversion_tariff_cost=round(diversion_tariff, 2),
+        diversion_tariff_cost=round(total_diversion_penalty, 2),
+        port_dues_cost_alt=round(port_dues_alt, 2),
+        pilotage_tug_cost_alt=round(pilotage_alt, 2),
+        fixed_diversion_penalty=round(fixed_div_penalty, 2),
+        congestion_surcharge_cost_alt=round(cong_surcharge_alt, 2),
         crane_operating_cost_alt=round(crane_cost_alt, 2),
         total_diversion_cost=round(total_div_cost, 2),
         net_cost_difference=round(net_diff, 2),
