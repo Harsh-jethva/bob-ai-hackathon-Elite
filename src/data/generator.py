@@ -32,6 +32,15 @@ class Vessel:
     destination_port: str
     preferred_port: str
     status: str  # scheduled | delayed | deferred | diverted
+    # Multi-Factor Priority & Financial Attributes
+    cargo_type: str = "Standard Containerized"
+    cargo_value_usd: float = 15_000_000.0
+    holding_cost_per_hour_usd: float = 800.0
+    laycan_end_h: float = 24.0
+    demurrage_rate_per_hour_usd: float = 1000.0
+    vessel_daily_charter_usd: float = 25_000.0
+    priority_score: float = 50.0
+    priority_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -176,6 +185,8 @@ def generate_vessels(
     scenario: str = "normal",
     ports: Optional[List[PortSpec]] = None,
     target_port_id: Optional[str] = None,
+    berths: Optional[List[Berth]] = None,
+    cranes: Optional[List[Crane]] = None,
 ) -> List[Vessel]:
     """Generate vessels deterministically for a given scenario.
 
@@ -183,6 +194,8 @@ def generate_vessels(
         target_port_id: if set, all vessels get preferred_port = target_port_id,
                         simulating ships inbound to the selected port.
     """
+    from src.optimization.priority_engine import CARGO_PROFILES, apply_priority_scoring
+
     rng = _seed_rng()
     if ports is None:
         ports = generate_ports()
@@ -195,6 +208,9 @@ def generate_vessels(
                     "berth_maintenance": 1.0, "weather_disruption": 1.5,
                     "congestion": 1.2}.get(scenario, 1.0)
 
+    cargo_types = list(CARGO_PROFILES.keys())
+    cargo_weights = [0.15, 0.20, 0.20, 0.25, 0.10, 0.10]
+
     vessels = []
     for i in range(num_vessels):
         vid = f"V{i+1:03d}"
@@ -202,20 +218,30 @@ def generate_vessels(
         arrival = rng.uniform(0, arrival_spread)
         service = rng.uniform(6, 24) * service_mult
         cargo = rng.uniform(1000, 20000)
-        priority = rng.choices([1, 2, 3], weights=[0.2, 0.3, 0.5])[0]
         vlen = rng.uniform(100, 350)
         vdraft = rng.uniform(5, 13)
-        cranes_req = rng.choices([1, 2, 3], weights=[0.3, 0.5, 0.2])[0]
+        cranes_req = 3 if vlen > 280 else (2 if vlen > 180 else 1)
         origin = rng.choice(ports).port_id
         dest = rng.choice(ports).port_id
         preferred = target_port_id if target_port_id else rng.choice(ports).port_id
-        vessels.append(Vessel(
+
+        # Multi-factor economic & cargo attributes
+        ctype = rng.choices(cargo_types, weights=cargo_weights)[0]
+        cprof = CARGO_PROFILES[ctype]
+        cval = round(cargo * cprof["unit_value_per_teu"] * rng.uniform(0.8, 1.2), 0)
+        holding_h = round(cval * cprof["holding_rate_hourly_pct"], 0)
+        laycan_window = rng.uniform(10.0, 30.0)
+        laycan_end = round(arrival + laycan_window, 1)
+        demurrage_h = round(rng.uniform(750, 1600) * cprof["demurrage_multiplier"], 0)
+        charter_day = round(rng.uniform(18000, 42000), 0)
+
+        v = Vessel(
             vessel_id=vid, vessel_name=vname,
             arrival_time=round(arrival, 2),
             estimated_arrival_time=round(arrival, 2),
             service_duration_h=round(service, 2),
             cargo_volume=round(cargo, 1),
-            priority=priority,
+            priority=2,  # Will be dynamically updated by priority_engine below
             vessel_length_m=round(vlen, 1),
             vessel_draft_m=round(vdraft, 1),
             required_cranes=cranes_req,
@@ -223,9 +249,22 @@ def generate_vessels(
             destination_port=dest if not target_port_id else target_port_id,
             preferred_port=preferred,
             status="scheduled",
-        ))
-    # Sort by arrival for deterministic FCFS
-    vessels.sort(key=lambda v: v.arrival_time)
+            cargo_type=ctype,
+            cargo_value_usd=cval,
+            holding_cost_per_hour_usd=holding_h,
+            laycan_end_h=laycan_end,
+            demurrage_rate_per_hour_usd=demurrage_h,
+            vessel_daily_charter_usd=charter_day,
+            priority_score=50.0,
+            priority_reasons=[],
+        )
+        vessels.append(v)
+
+    # Calculate dynamic multi-factor priority scores
+    apply_priority_scoring(vessels, berths, cranes)
+
+    # Sort by arrival for deterministic FCFS baseline comparison
+    vessels.sort(key=lambda x: x.arrival_time)
     return vessels
 
 
@@ -247,7 +286,10 @@ def generate_scenario(
 
     berths = generate_berths(ports, cluster=cluster)
     cranes = generate_cranes(ports, cluster=cluster)
-    vessels = generate_vessels(num_vessels, scenario, ports, target_port_id=target_port_id)
+    vessels = generate_vessels(
+        num_vessels, scenario, ports, target_port_id=target_port_id,
+        berths=berths, cranes=cranes
+    )
     return {
         "scenario": scenario,
         "ports": ports,

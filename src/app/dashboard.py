@@ -29,7 +29,12 @@ from src.data.features import validate_vessels, validate_ports
 from src.models.congestion_model import (
     predict_congestion, CongestionLevel, _format_queue_display
 )
-from src.optimization.planner import generate_fcfs, generate_optimized, PlanResult
+from src.optimization.planner import (
+    generate_fcfs, generate_optimized, PlanResult, compare_plans, PlanComparisonResult, VesselCostDetail
+)
+from src.optimization.priority_engine import (
+    evaluate_vessel_priority, apply_priority_scoring
+)
 from src.optimization.router import recommend_alternative_ports, AlternativePortRecommendation
 from src.simulation.port_sim import run_simulation, SimulationParam, SimulationResult
 from src.config.settings import settings
@@ -448,6 +453,19 @@ def main():
     st.markdown('<div class="main-header">🚢 PortPilot AI</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">Explainable Port Congestion Forecasting & Rolling 72-Hour Constraint-Aware Planning System</div>', unsafe_allow_html=True)
 
+    # ── Sidebar: Brand Header ───────────────────────────────────────────────
+    st.sidebar.markdown("""
+    <div style="background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 100%);
+                padding: 16px 14px; border-radius: 10px; margin-bottom: 18px; text-align: center; border: 1px solid #334155;">
+        <div style="font-size: 1.45rem; font-weight: 800; color: #38BDF8; letter-spacing: 0.5px;">
+            🚢 PortPilot AI
+        </div>
+        <div style="font-size: 0.78rem; color: #94A3B8; margin-top: 4px; font-weight: 500;">
+            Next-Gen Port Congestion & 72h Optimization
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── Sidebar: Data Stream Mode ────────────────────────────────────────────
     st.sidebar.header("📡 Data Stream Mode")
     mode_selection = st.sidebar.radio(
@@ -471,10 +489,8 @@ def main():
         index=0,
     )
 
-    # ── Sidebar: Planning controls ───────────────────────────────────────────
-    st.sidebar.header("🕹️ Planning Horizon Controls")
-    horizon = st.sidebar.slider("Planning Horizon (Hours)", 12, 168, settings.planning_horizon_hours, step=6)
-    num_vessels = st.sidebar.slider("Monitored Vessel Fleet Size", 5, 50, settings.default_num_vessels, step=1)
+    horizon = settings.planning_horizon_hours
+    num_vessels = settings.default_num_vessels
 
     # ── Load scenario (live or synthetic) ───────────────────────────────────
     live_mgr = get_live_data_manager()
@@ -778,39 +794,157 @@ def main():
                 st.session_state["fcfs"] = generate_fcfs(port_vessels, port_berths, port_cranes, horizon)
                 st.session_state["optimized"] = generate_optimized(port_vessels, port_berths, port_cranes, horizon)
 
-        # Auto-generate on first load
-        if "fcfs" not in st.session_state:
+        plan_cache_key = f"{selected_cluster_key}_{selected_port_id}_{scenario_name}_{horizon}_{len(port_vessels)}"
+        if st.session_state.get("plan_cache_key") != plan_cache_key:
             st.session_state["fcfs"] = generate_fcfs(port_vessels, port_berths, port_cranes, horizon)
-        if "optimized" not in st.session_state:
             st.session_state["optimized"] = generate_optimized(port_vessels, port_berths, port_cranes, horizon)
+            st.session_state["plan_cache_key"] = plan_cache_key
 
         fcfs_p: PlanResult = st.session_state.get("fcfs")
         opt_p: PlanResult = st.session_state.get("optimized")
+        comparison = compare_plans(fcfs_p, opt_p, port_vessels)
 
-        # KPI comparison
-        st.markdown("#### Plan Performance Metrics")
+        # ── 1. MULTI-FACTOR VESSEL PRIORITY BREAKDOWN ────────────────────────
+        with st.expander("💎 1. Dynamic Vessel Priority Scoring & Cargo Valuation Matrix", expanded=True):
+            st.caption(
+                "Vessel priority is computed dynamically across 5 weighted operational dimensions: "
+                "**1. Cargo Valuation & Perishability (35%)** (e.g. Pharma/Reefer vs Dry Bulk), "
+                "**2. Demurrage Penalty & Laycan Urgency (30%)** (contractual deadline proximity), "
+                "**3. Handling Duration & Turnaround Time (10%)**, "
+                "**4. Quay Crane Intensity (10%)**, and "
+                "**5. Physical Berth Draft & Length Scarcity (15%)**."
+            )
+            p_rows = []
+            for v in sorted(port_vessels, key=lambda x: (x.priority, -getattr(x, "priority_score", 0.0))):
+                cval_m = getattr(v, "cargo_value_usd", 15e6) / 1e6
+                h_cost = getattr(v, "holding_cost_per_hour_usd", 250.0)
+                dem_rate = getattr(v, "demurrage_rate_per_hour_usd", 800.0)
+                laycan = getattr(v, "laycan_end_h", v.arrival_time + 18.0)
+                pscore = getattr(v, "priority_score", 50.0)
+                reasons = getattr(v, "priority_reasons", [])
+                tier_badge = "🔴 P1 (Urgent)" if v.priority == 1 else ("🟡 P2 (High Value)" if v.priority == 2 else "🔵 P3 (Standard)")
+
+                p_rows.append({
+                    "Vessel ID": v.vessel_id,
+                    "Vessel Name": v.vessel_name,
+                    "Tier": tier_badge,
+                    "Priority Score": f"{pscore:.1f}/100",
+                    "Cargo Type": getattr(v, "cargo_type", "Standard"),
+                    "Cargo Value ($M)": f"${cval_m:.1f}M",
+                    "Holding Cost ($/h)": f"${h_cost:,.0f}/h",
+                    "Handling Time (h)": f"{v.service_duration_h:.1f}h",
+                    "Cranes Needed": f"{v.required_cranes} STS",
+                    "ETA (T+h)": f"T+{v.arrival_time:.1f}h",
+                    "Laycan Deadline": f"T+{laycan:.1f}h",
+                    "Demurrage Rate": f"${dem_rate:,.0f}/h",
+                    "AI Scoring Rationale": " | ".join(reasons[:2]) if reasons else "Standard operational parameters",
+                })
+            st.dataframe(pd.DataFrame(p_rows), use_container_width=True, hide_index=True)
+
+        # ── 2. ECONOMIC PROFIT & COST SAVINGS (PRIORITY VS FCFS) ─────────────
+        st.markdown("#### 💰 2. Profit & Cost Savings Realized (Priority Optimizer vs. FCFS Baseline)")
+        st.caption(
+            "Economic evaluation comparing standard First-Come-First-Served (FCFS) against the CP-SAT Multi-Factor Priority Optimizer. "
+            "Prioritizing high-holding-cost reefer/pharma cargo and urgent laycan deadlines dramatically curtails demurrage losses and cargo spoilage."
+        )
+
         mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
         with mcol1:
-            wait_diff = round(opt_p.avg_wait_hours - fcfs_p.avg_wait_hours, 1)
-            st.metric("Average Wait Time", f"{opt_p.avg_wait_hours:.1f} h",
-                      delta=f"{wait_diff} h vs FCFS ({fcfs_p.avg_wait_hours:.1f}h)", delta_color="inverse")
+            st.metric(
+                "Total Financial Saved",
+                f"${comparison.net_savings_usd:,.0f}",
+                delta=f"↓ {comparison.savings_pct:.1f}% cost reduction",
+            )
         with mcol2:
-            delay_diff = round(opt_p.avg_delay_hours - fcfs_p.avg_delay_hours, 1)
-            st.metric("Average Delay", f"{opt_p.avg_delay_hours:.1f} h",
-                      delta=f"{delay_diff} h vs FCFS", delta_color="inverse")
+            st.metric(
+                "Demurrage Losses Avoided",
+                f"${comparison.demurrage_saved_usd:,.0f}",
+                delta=f"FCFS: ${comparison.fcfs_demurrage_usd:,.0f} → Opt: ${comparison.opt_demurrage_usd:,.0f}",
+                delta_color="normal",
+            )
         with mcol3:
-            def_diff = opt_p.deferred_count - fcfs_p.deferred_count
-            st.metric("Deferred Vessels", f"{opt_p.deferred_count} / {len(port_vessels)}",
-                      delta=f"{def_diff} vs FCFS ({fcfs_p.deferred_count})", delta_color="inverse")
+            st.metric(
+                "Cargo Holding Cost Saved",
+                f"${comparison.holding_saved_usd:,.0f}",
+                delta=f"FCFS: ${comparison.fcfs_holding_usd:,.0f} → Opt: ${comparison.opt_holding_usd:,.0f}",
+                delta_color="normal",
+            )
         with mcol4:
-            st.metric("Berth Utilization", f"{opt_p.berth_utilization:.0%}",
-                      delta=f"{(opt_p.berth_utilization - fcfs_p.berth_utilization):.0%} vs FCFS")
+            st.metric(
+                "P1 Urgent Wait Reduction",
+                f"↓ {comparison.p1_wait_reduction_h:.1f} hours",
+                delta=f"P1 Avg Wait: {opt_p.p1_avg_wait_hours:.1f}h vs {fcfs_p.p1_avg_wait_hours:.1f}h",
+            )
         with mcol5:
-            solver_stat = opt_p.solver_result.status.value if opt_p.solver_result else "FEASIBLE"
-            st.metric("Solver Status", f"{solver_stat}", delta=f"{opt_p.runtime_seconds:.3f}s runtime")
+            st.metric(
+                "Charter OPEX Idle Saved",
+                f"${comparison.charter_saved_usd:,.0f}",
+                delta=f"FCFS: ${comparison.fcfs_charter_usd:,.0f} → Opt: ${comparison.opt_charter_usd:,.0f}",
+            )
 
-        # Gantt — with pre-existing occupied berths shown as grey blocks
-        st.markdown("#### 📅 Berth Allocation Gantt (including pre-existing occupancy)")
+        # Cost Breakdown Side-by-Side Chart
+        col_ch1, col_ch2 = st.columns([3, 2])
+        with col_ch1:
+            cost_comp_df = pd.DataFrame([
+                {
+                    "Scheduling Strategy": "Baseline (FCFS)",
+                    "Demurrage Penalties ($)": comparison.fcfs_demurrage_usd,
+                    "Cargo Holding Cost ($)": comparison.fcfs_holding_usd,
+                    "Vessel Idle Charter OPEX ($)": comparison.fcfs_charter_usd,
+                },
+                {
+                    "Scheduling Strategy": "Priority Optimized (CP-SAT)",
+                    "Demurrage Penalties ($)": comparison.opt_demurrage_usd,
+                    "Cargo Holding Cost ($)": comparison.opt_holding_usd,
+                    "Vessel Idle Charter OPEX ($)": comparison.opt_charter_usd,
+                },
+            ])
+            fig_p_cost = px.bar(
+                cost_comp_df,
+                x="Scheduling Strategy",
+                y=["Demurrage Penalties ($)", "Cargo Holding Cost ($)", "Vessel Idle Charter OPEX ($)"],
+                title="<b>Total Port Call Schedule Cost Breakdown: FCFS vs. Priority Optimized</b>",
+                barmode="stack",
+                color_discrete_sequence=["#EF4444", "#F59E0B", "#3B82F6"],
+            )
+            fig_p_cost.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), legend_title="Cost Category")
+            st.plotly_chart(fig_p_cost, use_container_width=True)
+
+        with col_ch2:
+            st.markdown("##### 💡 Key Financial Takeaways")
+            with st.container(border=True):
+                st.write(f"• **Net Economic Advantage:** Priority scheduling creates **${comparison.net_savings_usd:,.0f}** in net bottom-line efficiency across the fleet.")
+                st.write(f"• **Demurrage Avoidance:** **${comparison.demurrage_saved_usd:,.0f}** saved by eliminating contractual deadline penalties on high-risk vessels.")
+                st.write(f"• **Cargo Value Protection:** **${comparison.holding_saved_usd:,.0f}** in holding and depreciation costs preserved for premium perishables & pharma.")
+                st.write(f"• **Solver Efficiency:** Optimal CP-SAT allocation completed in **{opt_p.runtime_seconds:.3f} seconds**.")
+
+        # ── 3. VESSEL-BY-VESSEL PROFIT / LOSS TABLE ──────────────────────────
+        st.markdown("#### 📊 3. Vessel-by-Vessel Profit / Loss & Savings Detailed Ledger")
+        st.caption("Individual financial outcome for each vessel comparing FCFS waiting delay vs Priority-Optimized scheduling.")
+        vd_rows = []
+        for vd in comparison.vessel_details:
+            vd_rows.append({
+                "Vessel ID": vd.vessel_id,
+                "Vessel Name": vd.vessel_name,
+                "Priority": f"P{vd.priority} ({vd.priority_score:.0f})",
+                "Cargo Type": vd.cargo_type,
+                "Cargo Value": f"${vd.cargo_value_usd / 1e6:.1f}M",
+                "FCFS Wait (h)": f"{vd.fcfs_wait_h:.1f}h",
+                "FCFS Cost ($)": f"${vd.fcfs_cost_usd:,.0f}",
+                "Opt Wait (h)": f"{vd.opt_wait_h:.1f}h",
+                "Opt Cost ($)": f"${vd.opt_cost_usd:,.0f}",
+                "Wait Cut (h)": f"↓ {vd.wait_reduction_h:+.1f}h" if vd.wait_reduction_h > 0 else (f"↑ {vd.wait_reduction_h:.1f}h" if vd.wait_reduction_h < 0 else "0.0h"),
+                "Profit / Saved ($)": f"+${vd.cost_saved_usd:,.0f}" if vd.cost_saved_usd > 0 else (f"-${abs(vd.cost_saved_usd):,.0f}" if vd.cost_saved_usd < 0 else "$0"),
+                "Financial Verdict": vd.status,
+            })
+        if vd_rows:
+            st.dataframe(pd.DataFrame(vd_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No vessel comparison records available.")
+
+        # ── 4. BERTH ALLOCATION GANTT ────────────────────────────────────────
+        st.markdown("#### 📅 4. Berth Allocation Gantt Timeline (72-Hour Horizon)")
+        st.caption("Visual Gantt chart displaying berth occupancy over the 72-hour planning window. Grey blocks = vessels already docked; colored blocks = optimized arrivals.")
         fig_gantt = _build_gantt_chart(
             opt_p.assignments,
             vessels_by_id,
@@ -820,38 +954,38 @@ def main():
         )
         st.plotly_chart(fig_gantt, use_container_width=True)
 
-        # Allocation table
-        st.markdown("#### 📋 Detailed Berth & Crane Assignment Table")
+        # ── 5. DETAILED BERTH & CRANE ASSIGNMENT TABLE ────────────────────────
+        st.markdown("#### 📋 5. Detailed Berth & Crane Assignment Schedule Table")
         plan_view = st.radio(
             "Select Schedule Table View",
-            ["Optimized Plan (CP-SAT)", "Baseline Plan (FCFS)"],
+            ["Optimized Plan (CP-SAT Priority)", "Baseline Plan (FCFS Arrival Order)"],
             horizontal=True
         )
         active_plan = opt_p if "Optimized" in plan_view else fcfs_p
 
-        # Build enriched table for selected port vessels
         rows = []
         port_vessel_ids = {v.vessel_id for v in port_vessels}
         for a in active_plan.assignments:
             if a.vessel_id not in port_vessel_ids:
                 continue
             v = vessels_by_id.get(a.vessel_id)
-            # Find the berth object for extra info
             berth_obj = next((b for b in port_berths if b.berth_id == a.berth_id), None)
             crane_obj = next((c for c in port_cranes if c.crane_id == a.crane_id), None)
+            cval_m = getattr(v, "cargo_value_usd", 15e6) / 1e6 if v else 0.0
+            pscore = getattr(v, "priority_score", 50.0) if v else 50.0
+            ctype = getattr(v, "cargo_type", "Standard Containerized") if v else "Standard"
             rows.append({
                 "Vessel ID": a.vessel_id,
                 "Vessel Name": v.vessel_name if v else "N/A",
-                "Priority": f"P{v.priority}" if v else "-",
-                "Arrival (T+h)": f"{v.arrival_time:.1f}h" if v else "-",
+                "Priority Tier": f"P{v.priority} (Score {pscore:.0f})" if v else "-",
+                "Cargo Category": f"{ctype} (${cval_m:.1f}M)",
+                "Arrival (T+h)": f"T+{v.arrival_time:.1f}h" if v else "-",
                 "Berth Assigned": a.berth_id if not a.deferred else "— Queued —",
-                "Berth Free At": f"T+{berth_obj.free_at_hours:.1f}h" if (berth_obj and berth_obj.currently_occupied) else "Available",
-                "Crane Assigned": a.crane_id if not a.deferred else "—",
-                "Crane Busy Until": f"T+{crane_obj.busy_until_hours:.1f}h" if (crane_obj and crane_obj.currently_busy) else "Free",
-                "Wait (h)": f"{a.wait_time:.1f}h" if not a.deferred else "Queued",
+                "Cranes Assigned": a.crane_id if not a.deferred else "—",
+                "Wait Time": f"{a.wait_time:.1f}h" if not a.deferred else "Queued",
                 "Service Start": f"T+{a.start_time:.1f}h" if not a.deferred else "—",
                 "Service End": f"T+{a.end_time:.1f}h" if not a.deferred else "—",
-                "Status": "⚠️ DEFERRED" if a.deferred else "✅ SCHEDULED",
+                "Schedule Status": "⚠️ DEFERRED" if a.deferred else "✅ SCHEDULED",
             })
         if rows:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -1049,65 +1183,38 @@ def main():
             alt_cols = st.columns(len(opt_res.alternatives))
             for i, alt in enumerate(opt_res.alternatives):
                 with alt_cols[i]:
-                    if not alt.is_physically_feasible:
-                        st.markdown(f"""
-                        <div style="background-color: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 16px; min-height: 380px;">
-                            <h4 style="margin: 0 0 6px 0; color: #64748B;">{alt.candidate_port.port_name}</h4>
-                            <div style="background-color: #FEE2E2; color: #991B1B; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; font-weight: 700; display: inline-block; margin-bottom: 10px;">
-                                ❌ Incompatible Vessel Size
-                            </div>
-                            <p style="font-size: 0.9em; color: #64748B; margin: 6px 0;"><b>Distance:</b> {alt.distance_nm:.0f} NM ({alt.distance_km:.0f} km)</p>
-                            <hr style="margin: 10px 0;">
-                            <p style="font-size: 0.88em; color: #DC2626;"><b>Reason:</b><br>{alt.infeasibility_reason}</p>
-                            <p style="font-size: 0.82em; color: #64748B; margin-top: 10px;">
-                                Candidate limits: Max length {alt.candidate_port.max_vessel_length_m}m, Max draft {alt.candidate_port.max_vessel_draft_m}m
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        dc = alt.diversion_cost
-                        is_rec = alt.is_recommended
-                        badge_color = "#166534" if is_rec else "#9A3412"
-                        badge_bg = "#DCFCE7" if is_rec else "#FFEDD5"
-                        border_color = "#22C55E" if is_rec else "#CBD5E1"
-                        net_sign = "+" if dc.net_cost_difference > 0 else "-"
-                        net_color = "#166534" if dc.net_cost_difference > 0 else "#DC2626"
+                    with st.container(border=True):
+                        st.markdown(f"#### {alt.candidate_port.port_name}")
+                        if not alt.is_physically_feasible:
+                            st.error("❌ Incompatible Vessel Size")
+                            st.write(f"**Distance:** {alt.distance_nm:.0f} NM ({alt.distance_km:.0f} km)")
+                            st.markdown(f"**Reason:** {alt.infeasibility_reason}")
+                            st.caption(f"Port limits: Max LOA {alt.candidate_port.max_vessel_length_m:.0f}m, Max Draft {alt.candidate_port.max_vessel_draft_m:.1f}m")
+                        else:
+                            dc = alt.diversion_cost
+                            if alt.is_recommended:
+                                st.success(f"**{alt.summary_verdict}**")
+                            else:
+                                st.warning(f"**{alt.summary_verdict}**")
 
-                        st.markdown(f"""
-                        <div style="background-color: #F8FAFC; border: 2px solid {border_color}; border-radius: 8px; padding: 16px; min-height: 380px;">
-                            <h4 style="margin: 0 0 6px 0; color: #1E293B;">{alt.candidate_port.port_name}</h4>
-                            <div style="background-color: {badge_bg}; color: {badge_color}; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; font-weight: 700; display: inline-block; margin-bottom: 10px;">
-                                {alt.summary_verdict}
-                            </div>
-                            <div style="font-size: 0.88em; color: #475569; margin-bottom: 4px;">
-                                📍 <b>Additional Transit:</b> {alt.distance_nm:.0f} NM ({dc.extra_sailing_hours:.1f}h @ {custom_cost_params.vessel_speed_knots} kts)
-                            </div>
-                            <div style="font-size: 0.88em; color: #475569; margin-bottom: 4px;">
-                                ⛽ <b>Extra Transit Bunker:</b> {dc.extra_sailing_fuel_mt:.1f} MT (${dc.extra_sailing_fuel_cost:,.0f})
-                            </div>
-                            <div style="font-size: 0.88em; color: #475569; margin-bottom: 4px;">
-                                ⏳ <b>Expected Port Wait:</b> {alt.expected_wait_hours:.1f} hours
-                            </div>
-                            <div style="font-size: 0.88em; color: #475569; margin-bottom: 6px;">
-                                💰 <b>Total Diversion Cost:</b> ${dc.total_diversion_cost:,.0f}
-                            </div>
-                            <div style="background-color: white; border: 1px solid #E2E8F0; border-radius: 6px; padding: 8px 10px; margin: 10px 0;">
-                                <div style="font-size: 0.8em; color: #64748B; text-transform: uppercase;">Net Economic Delta vs Target:</div>
-                                <div style="font-size: 1.15em; font-weight: 800; color: {net_color};">
-                                    {net_sign}${abs(dc.net_cost_difference):,.0f} {'SAVINGS' if dc.net_cost_difference > 0 else 'PREMIUM'}
-                                </div>
-                                <div style="font-size: 0.8em; color: #64748B; margin-top: 2px;">
-                                    Turnaround Time: {dc.time_difference_hours:+.1f}h vs target
-                                </div>
-                            </div>
-                            <div style="font-size: 0.82em; color: #059669; margin-top: 6px;">
-                                {'<br>'.join('• ' + p for p in alt.pros[:2])}
-                            </div>
-                            <div style="font-size: 0.82em; color: #DC2626; margin-top: 4px;">
-                                {'<br>'.join('• ' + c for c in alt.cons[:2])}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            st.write(f"📍 **Transit:** {alt.distance_nm:.0f} NM ({dc.extra_sailing_hours:.1f}h)")
+                            st.write(f"⛽ **Extra Bunker:** {dc.extra_sailing_fuel_mt:.1f} MT (${dc.extra_sailing_fuel_cost:,.0f})")
+                            st.write(f"⏳ **Expected Port Wait:** {alt.expected_wait_hours:.1f} hours")
+                            st.write(f"💰 **Total Diversion Cost:** ${dc.total_diversion_cost:,.0f}")
+
+                            net_delta_label = f"+${dc.net_cost_difference:,.0f} SAVINGS" if dc.net_cost_difference > 0 else f"-${abs(dc.net_cost_difference):,.0f} PREMIUM"
+                            st.metric(
+                                label="Net Economic Delta vs Target",
+                                value=net_delta_label,
+                                delta=f"{dc.time_difference_hours:+.1f}h turnaround vs target",
+                            )
+
+                            if alt.pros:
+                                for p in alt.pros[:2]:
+                                    st.caption(f"• {p}")
+                            if alt.cons:
+                                for c in alt.cons[:2]:
+                                    st.caption(f"⚠️ {c}")
 
             # ── Visual Cost Comparison Bar Chart ──────────────────────────────
             st.markdown("#### 📊 Comparative Financial Modeling: Target Port vs Alternatives")

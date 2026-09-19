@@ -1,7 +1,7 @@
 """Rolling 72-hour planning orchestration (PRD 11.6).
 
-Orchestrates FCFS baseline + optimized plan generation with
-consistent evaluation populations.
+Orchestrates FCFS baseline + priority-optimized plan generation with
+consistent evaluation populations and comprehensive financial cost modeling.
 """
 
 from typing import List, Dict, Any, Tuple, Optional
@@ -29,14 +29,86 @@ class PlanResult:
     berth_utilization: float
     crane_utilization: float
     runtime_seconds: float
+    # Economic cost metrics ($)
+    total_demurrage_cost: float = 0.0
+    total_cargo_holding_cost: float = 0.0
+    total_charter_idle_cost: float = 0.0
+    total_schedule_cost: float = 0.0
+    p1_avg_wait_hours: float = 0.0
+    p2_avg_wait_hours: float = 0.0
+    p3_avg_wait_hours: float = 0.0
 
 
-def _compute_kpis(assignments: List[ScheduleAssignment],
-                    vessels: List[Vessel],
-                    berths: List[Berth],
-                    cranes: List[Crane],
-                    horizon_hours: float) -> Dict[str, float]:
-    """Compute KPIs for a plan with proper population denominators (PRD 13)."""
+@dataclass
+class VesselCostDetail:
+    """Individual vessel cost comparison between FCFS and Priority Optimization."""
+    vessel_id: str
+    vessel_name: str
+    priority: int
+    priority_score: float
+    cargo_type: str
+    cargo_value_usd: float
+    fcfs_wait_h: float
+    opt_wait_h: float
+    wait_reduction_h: float
+    fcfs_cost_usd: float
+    opt_cost_usd: float
+    cost_saved_usd: float
+    status: str
+
+
+@dataclass
+class PlanComparisonResult:
+    """Detailed financial savings and operational comparison between FCFS and Priority Optimization."""
+    fcfs_total_cost_usd: float
+    opt_total_cost_usd: float
+    net_savings_usd: float
+    savings_pct: float
+    fcfs_demurrage_usd: float
+    opt_demurrage_usd: float
+    demurrage_saved_usd: float
+    fcfs_holding_usd: float
+    opt_holding_usd: float
+    holding_saved_usd: float
+    fcfs_charter_usd: float
+    opt_charter_usd: float
+    charter_saved_usd: float
+    p1_wait_reduction_h: float
+    p2_wait_reduction_h: float
+    p3_wait_reduction_h: float
+    vessel_details: List[VesselCostDetail] = field(default_factory=list)
+
+
+def _compute_vessel_schedule_cost(v: Vessel, a: ScheduleAssignment) -> Tuple[float, float, float, float]:
+    """Calculate (demurrage, cargo_holding, charter_idle, total_cost) for a vessel assignment."""
+    if a.deferred:
+        # Deferred penalty: heavy rescheduling + 24h holding + penalty
+        holding = 24.0 * getattr(v, "holding_cost_per_hour_usd", 800.0)
+        charter = 24.0 * (getattr(v, "vessel_daily_charter_usd", 25_000.0) / 24.0)
+        demurrage = 18.0 * getattr(v, "demurrage_rate_per_hour_usd", 1000.0)
+        deferral_penalty = 50_000.0
+        return (demurrage, holding, charter, demurrage + holding + charter + deferral_penalty)
+
+    wait_h = a.wait_time
+    laytime_free = 12.0
+    demurrage_h = max(0.0, wait_h - laytime_free)
+
+    demurrage = demurrage_h * getattr(v, "demurrage_rate_per_hour_usd", 1000.0)
+    holding = wait_h * getattr(v, "holding_cost_per_hour_usd", 800.0)
+    charter = wait_h * (getattr(v, "vessel_daily_charter_usd", 25_000.0) / 24.0)
+    total = demurrage + holding + charter
+
+    return (demurrage, holding, charter, total)
+
+
+def _compute_kpis(
+    assignments: List[ScheduleAssignment],
+    vessels: List[Vessel],
+    berths: List[Berth],
+    cranes: List[Crane],
+    horizon_hours: float,
+) -> Dict[str, Any]:
+    """Compute KPIs for a plan with proper population denominators and financial costs."""
     n = len(assignments)
     if n == 0:
         return {
@@ -45,6 +117,13 @@ def _compute_kpis(assignments: List[ScheduleAssignment],
             "deferred_count": 0,
             "berth_utilization": 0.0,
             "crane_utilization": 0.0,
+            "total_demurrage_cost": 0.0,
+            "total_cargo_holding_cost": 0.0,
+            "total_charter_idle_cost": 0.0,
+            "total_schedule_cost": 0.0,
+            "p1_avg_wait_hours": 0.0,
+            "p2_avg_wait_hours": 0.0,
+            "p3_avg_wait_hours": 0.0,
         }
 
     scheduled = [a for a in assignments if not a.deferred]
@@ -62,12 +141,45 @@ def _compute_kpis(assignments: List[ScheduleAssignment],
     berth_occupied_h = sum(max(0.0, min(horizon_hours, a.end_time) - a.start_time) for a in scheduled)
     crane_occupied_h = sum(max(0.0, min(horizon_hours, a.end_time) - a.start_time) for a in scheduled)
 
+    vessels_by_id = {v.vessel_id: v for v in vessels}
+
+    tot_demurrage = 0.0
+    tot_holding = 0.0
+    tot_charter = 0.0
+    tot_cost = 0.0
+
+    p1_waits, p2_waits, p3_waits = [], [], []
+
+    for a in assignments:
+        v = vessels_by_id.get(a.vessel_id)
+        if v:
+            dem, hld, cht, tc = _compute_vessel_schedule_cost(v, a)
+            tot_demurrage += dem
+            tot_holding += hld
+            tot_charter += cht
+            tot_cost += tc
+
+            if not a.deferred:
+                if v.priority == 1:
+                    p1_waits.append(a.wait_time)
+                elif v.priority == 2:
+                    p2_waits.append(a.wait_time)
+                else:
+                    p3_waits.append(a.wait_time)
+
     return {
         "avg_wait_hours": avg_wait,
         "avg_delay_hours": avg_delay,
         "deferred_count": len(deferred),
         "berth_utilization": min(1.0, round(berth_occupied_h / total_berth_cap, 3)),
         "crane_utilization": min(1.0, round(crane_occupied_h / total_crane_cap, 3)),
+        "total_demurrage_cost": round(tot_demurrage, 2),
+        "total_cargo_holding_cost": round(tot_holding, 2),
+        "total_charter_idle_cost": round(tot_charter, 2),
+        "total_schedule_cost": round(tot_cost, 2),
+        "p1_avg_wait_hours": round(sum(p1_waits) / len(p1_waits), 2) if p1_waits else 0.0,
+        "p2_avg_wait_hours": round(sum(p2_waits) / len(p2_waits), 2) if p2_waits else 0.0,
+        "p3_avg_wait_hours": round(sum(p3_waits) / len(p3_waits), 2) if p3_waits else 0.0,
     }
 
 
@@ -81,7 +193,7 @@ def generate_fcfs(
     from src.models.congestion_model import predict_congestion
     forecasts = predict_congestion(vessels, berths, cranes, horizon_hours)
 
-    # FCFS = sort by arrival, assign earliest available berth/crane
+    # FCFS = sort strictly by arrival time
     assignments = []
     valid_berths = [b for b in berths if getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)]
     candidates_pool = valid_berths if valid_berths else berths
@@ -147,6 +259,13 @@ def generate_fcfs(
         berth_utilization=kpis["berth_utilization"],
         crane_utilization=kpis["crane_utilization"],
         runtime_seconds=0.0,
+        total_demurrage_cost=kpis["total_demurrage_cost"],
+        total_cargo_holding_cost=kpis["total_cargo_holding_cost"],
+        total_charter_idle_cost=kpis["total_charter_idle_cost"],
+        total_schedule_cost=kpis["total_schedule_cost"],
+        p1_avg_wait_hours=kpis["p1_avg_wait_hours"],
+        p2_avg_wait_hours=kpis["p2_avg_wait_hours"],
+        p3_avg_wait_hours=kpis["p3_avg_wait_hours"],
     )
 
 
@@ -156,7 +275,7 @@ def generate_optimized(
     cranes: List[Crane],
     horizon_hours: float = 72.0,
 ) -> PlanResult:
-    """Generate optimized berth- and crane-aware plan (PRD 11.4)."""
+    """Generate priority-optimized berth- and crane-aware plan (PRD 11.4)."""
     from src.models.congestion_model import predict_congestion
     forecasts = predict_congestion(vessels, berths, cranes, horizon_hours)
 
@@ -194,6 +313,13 @@ def generate_optimized(
         berth_utilization=kpis["berth_utilization"],
         crane_utilization=kpis["crane_utilization"],
         runtime_seconds=solver_result.runtime_seconds,
+        total_demurrage_cost=kpis["total_demurrage_cost"],
+        total_cargo_holding_cost=kpis["total_cargo_holding_cost"],
+        total_charter_idle_cost=kpis["total_charter_idle_cost"],
+        total_schedule_cost=kpis["total_schedule_cost"],
+        p1_avg_wait_hours=kpis["p1_avg_wait_hours"],
+        p2_avg_wait_hours=kpis["p2_avg_wait_hours"],
+        p3_avg_wait_hours=kpis["p3_avg_wait_hours"],
     )
 
 
@@ -207,3 +333,89 @@ def generate_both(
     fcfs = generate_fcfs(vessels, berths, cranes, horizon_hours)
     optimized = generate_optimized(vessels, berths, cranes, horizon_hours)
     return fcfs, optimized
+
+
+def compare_plans(
+    fcfs_plan: PlanResult,
+    opt_plan: PlanResult,
+    vessels: List[Vessel],
+) -> PlanComparisonResult:
+    """Perform detailed economic cost and operational comparison between FCFS and Priority Optimization."""
+    fcfs_by_id = {a.vessel_id: a for a in fcfs_plan.assignments}
+    opt_by_id = {a.vessel_id: a for a in opt_plan.assignments}
+    vessels_by_id = {v.vessel_id: v for v in vessels}
+
+    vessel_details: List[VesselCostDetail] = []
+
+    for v in vessels:
+        a_fcfs = fcfs_by_id.get(v.vessel_id)
+        a_opt = opt_by_id.get(v.vessel_id)
+
+        if not a_fcfs or not a_opt:
+            continue
+
+        _, _, _, cost_fcfs = _compute_vessel_schedule_cost(v, a_fcfs)
+        _, _, _, cost_opt = _compute_vessel_schedule_cost(v, a_opt)
+
+        wait_fcfs = a_fcfs.wait_time if not a_fcfs.deferred else 24.0
+        wait_opt = a_opt.wait_time if not a_opt.deferred else 24.0
+        wait_diff = round(wait_fcfs - wait_opt, 2)
+        cost_diff = round(cost_fcfs - cost_opt, 2)
+
+        if a_opt.deferred:
+            status = "⚠️ Deferred"
+        elif cost_diff > 0:
+            status = f"✅ Saved ${cost_diff:,.0f}"
+        elif cost_diff < 0:
+            status = f"ℹ️ +${abs(cost_diff):,.0f}"
+        else:
+            status = "⏸️ Neutral"
+
+        vessel_details.append(VesselCostDetail(
+            vessel_id=v.vessel_id,
+            vessel_name=v.vessel_name,
+            priority=v.priority,
+            priority_score=getattr(v, "priority_score", 50.0),
+            cargo_type=getattr(v, "cargo_type", "Standard Containerized"),
+            cargo_value_usd=getattr(v, "cargo_value_usd", 15_000_000.0),
+            fcfs_wait_h=round(wait_fcfs, 2),
+            opt_wait_h=round(wait_opt, 2),
+            wait_reduction_h=wait_diff,
+            fcfs_cost_usd=round(cost_fcfs, 2),
+            opt_cost_usd=round(cost_opt, 2),
+            cost_saved_usd=cost_diff,
+            status=status,
+        ))
+
+    # Sort details: highest priority first, then highest cost savings
+    vessel_details.sort(key=lambda d: (d.priority, -d.cost_saved_usd))
+
+    net_savings = max(0.0, round(fcfs_plan.total_schedule_cost - opt_plan.total_schedule_cost, 2))
+    savings_pct = round((net_savings / max(1.0, fcfs_plan.total_schedule_cost)) * 100.0, 1)
+    demurrage_saved = max(0.0, round(fcfs_plan.total_demurrage_cost - opt_plan.total_demurrage_cost, 2))
+    holding_saved = max(0.0, round(fcfs_plan.total_cargo_holding_cost - opt_plan.total_cargo_holding_cost, 2))
+    charter_saved = max(0.0, round(fcfs_plan.total_charter_idle_cost - opt_plan.total_charter_idle_cost, 2))
+
+    p1_reduction = round(max(0.0, fcfs_plan.p1_avg_wait_hours - opt_plan.p1_avg_wait_hours), 2)
+    p2_reduction = round(max(0.0, fcfs_plan.p2_avg_wait_hours - opt_plan.p2_avg_wait_hours), 2)
+    p3_reduction = round(max(0.0, fcfs_plan.p3_avg_wait_hours - opt_plan.p3_avg_wait_hours), 2)
+
+    return PlanComparisonResult(
+        fcfs_total_cost_usd=fcfs_plan.total_schedule_cost,
+        opt_total_cost_usd=opt_plan.total_schedule_cost,
+        net_savings_usd=net_savings,
+        savings_pct=savings_pct,
+        fcfs_demurrage_usd=fcfs_plan.total_demurrage_cost,
+        opt_demurrage_usd=opt_plan.total_demurrage_cost,
+        demurrage_saved_usd=demurrage_saved,
+        fcfs_holding_usd=fcfs_plan.total_cargo_holding_cost,
+        opt_holding_usd=opt_plan.total_cargo_holding_cost,
+        holding_saved_usd=holding_saved,
+        fcfs_charter_usd=fcfs_plan.total_charter_idle_cost,
+        opt_charter_usd=opt_plan.total_charter_idle_cost,
+        charter_saved_usd=charter_saved,
+        p1_wait_reduction_h=p1_reduction,
+        p2_wait_reduction_h=p2_reduction,
+        p3_wait_reduction_h=p3_reduction,
+        vessel_details=vessel_details,
+    )

@@ -1,32 +1,63 @@
+"""Demo Scenario Ingestion and Loader.
+
+Provides standardized scenario loading for offline evaluation and testing.
+"""
+
+from typing import Dict, Any, Tuple, List
 import pandas as pd
-from datetime import timedelta
-from src.data.generator import generate_vessels
-from src.config.ports import PORTS
+from datetime import datetime, timedelta
 
-def load_scenario(seed=11, add_burst=True):
-    now = pd.Timestamp("2024-04-01 09:00")
-    inbound = pd.concat([
-        generate_vessels("PORT_A", now - timedelta(hours=12), 5, PORTS["PORT_A"]["base_arrivals_per_day"], seed),
-        generate_vessels("PORT_B", now - timedelta(hours=12), 5, PORTS["PORT_B"]["base_arrivals_per_day"], seed + 1),
-    ])
-    if add_burst:  # inject the "11 AM pile-up" from the problem statement
-        burst = [dict(vessel_id=f"PORT_A-BST{i}", name=f"MV Burst-{i}", port="PORT_A",
-                      eta=now + timedelta(hours=h), teu=teu, length_m=l, draft_m=d,
-                      priority=p, status="inbound")
-                 for i, (h, teu, l, d, p) in enumerate([
-                     (2.0, 2000, 180, 9.2, 1), (3.0, 3000, 230, 11.0, 2),
-                     (3.5, 2500, 205, 10.0, 2), (4.0, 3500, 255, 12.0, 1)])]
-        inbound = pd.concat([inbound, pd.DataFrame(burst)], ignore_index=True)
+from src.data.generator import generate_scenario, Vessel, Berth, Crane, PortSpec
+from src.config.ports import PORT_CLUSTERS, DEFAULT_PORTS, get_live_state
 
-    # live state: ships already waiting + 2 berths currently occupied
-    waiting = {pid: int(((inbound.port == pid) & (inbound.eta <= now)).sum()) for pid in PORTS}
-    live = {pid: dict(waiting_now=waiting[pid], berth_occupancy_pct=60, crane_util_pct=70,
-                      yard_occupancy_pct=45,
-                      occupied=[dict(vessel_id=f"{pid}-OCC1", berth_index=0,
-                                     start=now - timedelta(hours=6),
-                                     end=now + timedelta(hours=7), cranes=2),
-                                dict(vessel_id=f"{pid}-OCC2", berth_index=1,
-                                     start=now - timedelta(hours=3),
-                                     end=now + timedelta(hours=11), cranes=2)])
-             for pid in PORTS}
-    return now, live, inbound[inbound.eta <= now + timedelta(hours=76)]
+
+def load_scenario(
+    cluster: str = "india",
+    scenario_name: str = "normal",
+    num_vessels: int = 20,
+    add_burst: bool = False,
+) -> Dict[str, Any]:
+    """Load a fully structured simulation scenario package."""
+    scenario = generate_scenario(
+        scenario=scenario_name,
+        num_vessels=num_vessels,
+        cluster=cluster,
+    )
+    
+    if add_burst:
+        # Inject sudden arrival surge of 4 priority vessels
+        base_vessels = scenario["vessels"]
+        burst_vessels = [
+            Vessel(
+                vessel_id=f"BST-{i+1:03d}",
+                vessel_name=f"MV Priority Surge {i+1}",
+                arrival_time=round(1.5 + (i * 0.8), 2),
+                estimated_arrival_time=round(1.5 + (i * 0.8), 2),
+                service_duration_h=12.0,
+                cargo_volume=14500.0,
+                priority=1,
+                vessel_length_m=340.0,
+                vessel_draft_m=12.5,
+                required_cranes=3,
+                origin_port="P3",
+                destination_port="P1",
+                preferred_port="P1",
+                status="scheduled",
+            )
+            for i in range(4)
+        ]
+        scenario["vessels"] = sorted(base_vessels + burst_vessels, key=lambda v: v.arrival_time)
+
+    return scenario
+
+
+def load_scenario_as_dataframe(cluster: str = "india", num_vessels: int = 20) -> pd.DataFrame:
+    """Load scenario vessel fleet formatted as a pandas DataFrame."""
+    sc = load_scenario(cluster=cluster, num_vessels=num_vessels)
+    rows = [v.__dict__ for v in sc["vessels"]]
+    return pd.DataFrame(rows)
+
+
+if __name__ == "__main__":
+    sc = load_scenario()
+    print(f"Loaded demo scenario with {len(sc['vessels'])} vessels across {len(sc['ports'])} ports.")

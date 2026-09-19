@@ -71,7 +71,15 @@ def _solve_greedy_fallback(
 ) -> SolverResult:
     """Greedy priority-weighted FCFS heuristic fallback."""
     t0 = time.time()
-    sorted_vessels = sorted(vessels, key=lambda v: (v.priority, v.arrival_time))
+    # Sort vessels by priority score (descending), priority level, and arrival time
+    sorted_vessels = sorted(
+        vessels,
+        key=lambda v: (
+            -getattr(v, "priority_score", float(4 - v.priority) * 25.0),
+            v.priority,
+            v.arrival_time
+        )
+    )
 
     # Respect existing berth occupancy and maintenance windows
     valid_berths = [b for b in berths if getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)]
@@ -293,15 +301,24 @@ def solve_berth_allocation(
                 if port_intervals:
                     model.AddCumulative(port_intervals, port_demands, total_cranes)
 
-        # Optimization Objective: Minimize weighted wait time + deferral penalties
+        # Optimization Objective: Minimize economic wait & delay costs + deferral penalties
         obj_terms = []
         for v in vessels:
             v_id = v.vessel_id
-            p_weight = max(1, 4 - v.priority)  # Priority 1 -> 3, Priority 3 -> 1
+            # Multi-factor economic weight based on holding cost, charter OPEX, and demurrage rate
+            hourly_cost = (
+                getattr(v, "holding_cost_per_hour_usd", 800.0) +
+                (getattr(v, "vessel_daily_charter_usd", 25_000.0) / 24.0) +
+                getattr(v, "demurrage_rate_per_hour_usd", 1000.0)
+            )
+            # Composite priority scaling: P1 (high score) gets high multiplier, P3 gets lower
+            p_score = getattr(v, "priority_score", float(4 - v.priority) * 25.0)
+            cost_weight = max(1, int(round((hourly_cost / 250.0) * (0.5 + p_score / 100.0))))
+
             arr_int = max(0, int(round(v.arrival_time * scale)))
 
-            # Heavy penalty for deferring a vessel
-            obj_terms.append(deferred_vars[v_id] * 5000 * p_weight)
+            # Heavy penalty for deferring a high-priority/high-value vessel
+            obj_terms.append(deferred_vars[v_id] * int(8000 * cost_weight))
 
             # Single wait variable per vessel
             wait_v = model.NewIntVar(0, horizon_int, f"wait_{v_id}")
@@ -317,7 +334,7 @@ def solve_berth_allocation(
                     port_pref_penalty = 0 if b.port_id == v.preferred_port else 5
                     obj_terms.append(is_assigned * port_pref_penalty)
 
-            obj_terms.append(wait_v * p_weight)
+            obj_terms.append(wait_v * cost_weight)
 
         model.Minimize(sum(obj_terms))
 

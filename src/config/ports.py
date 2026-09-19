@@ -73,33 +73,60 @@ PORT_LIVE_STATES: Dict[str, Dict[str, PortLiveState]] = {
         ),
         "P2": PortLiveState(
             occupied_berths=[
-                OccupiedBerth("B-P2-1", "MV Gujarat Star",     free_at_hours=3.0,  cargo_type="Container"),
-                OccupiedBerth("B-P2-2", "MV Mundra Pioneer",   free_at_hours=11.5, cargo_type="Liquid Bulk"),
+                OccupiedBerth("B-P2-1", "MV Gateway Trader",   free_at_hours=5.0,  cargo_type="Container"),
             ],
             crane_busy_until={
-                "C-P2-1": 3.0,
-                "C-P2-2": 11.5,
-                "C-P2-3": 1.5,
+                "C-P2-1": 5.0,
+                "C-P2-2": 0.0,
+                "C-P2-3": 0.0,
                 "C-P2-4": 0.0,
-                "C-P2-5": 0.0,
-                "C-P2-6": 0.0,
-                "C-P2-7": 0.0,
-                "C-P2-8": 0.0,
             },
-            berth_occupancy_pct=0.40,   # 2/5 berths occupied
+            berth_occupancy_pct=0.33,   # 1/3 berths occupied
         ),
         "P3": PortLiveState(
             occupied_berths=[
-                OccupiedBerth("B-P3-1", "MV Kerala Queen",     free_at_hours=6.0,  cargo_type="Container"),
-                OccupiedBerth("B-P3-2", "MV Cochin Carrier",   free_at_hours=14.0, cargo_type="Ro-Ro"),
+                OccupiedBerth("B-P3-1", "MV Surat Merchant",   free_at_hours=6.0,  cargo_type="Container"),
             ],
             crane_busy_until={
                 "C-P3-1": 6.0,
-                "C-P3-2": 14.0,
-                "C-P3-3": 3.5,
+                "C-P3-2": 2.5,
+                "C-P3-3": 0.0,
                 "C-P3-4": 0.0,
+                "C-P3-5": 0.0,
             },
-            berth_occupancy_pct=0.67,   # 2/3 berths occupied
+            berth_occupancy_pct=0.33,   # 1/3 berths occupied
+        ),
+        "P4": PortLiveState(
+            occupied_berths=[
+                OccupiedBerth("B-P4-1", "MV Gujarat Star",     free_at_hours=3.0,  cargo_type="Container"),
+                OccupiedBerth("B-P4-2", "MV Mundra Pioneer",   free_at_hours=11.5, cargo_type="Liquid Bulk"),
+            ],
+            crane_busy_until={
+                "C-P4-1": 3.0,
+                "C-P4-2": 11.5,
+                "C-P4-3": 1.5,
+                "C-P4-4": 0.0,
+                "C-P4-5": 0.0,
+                "C-P4-6": 0.0,
+                "C-P4-7": 0.0,
+                "C-P4-8": 0.0,
+            },
+            berth_occupancy_pct=0.40,   # 2/5 berths occupied
+        ),
+        "P5": PortLiveState(
+            occupied_berths=[
+                OccupiedBerth("B-P5-1", "MV Kutch Logistics",  free_at_hours=4.0,  cargo_type="Bulk"),
+                OccupiedBerth("B-P5-2", "MV Gulf Carrier",     free_at_hours=9.0,  cargo_type="Container"),
+            ],
+            crane_busy_until={
+                "C-P5-1": 4.0,
+                "C-P5-2": 9.0,
+                "C-P5-3": 0.0,
+                "C-P5-4": 0.0,
+                "C-P5-5": 0.0,
+                "C-P5-6": 0.0,
+            },
+            berth_occupancy_pct=0.50,   # 2/4 berths occupied
         ),
     },
 
@@ -259,11 +286,13 @@ PORT_LIVE_STATES: Dict[str, Dict[str, PortLiveState]] = {
 # Regional Port Clusters
 PORT_CLUSTERS: Dict[str, Dict[str, Any]] = {
     "india": {
-        "cluster_name": "🇮🇳 Indian Major Ports (JNPT / Mundra / Cochin)",
+        "cluster_name": "🇮🇳 West Coast India Corridor (Mumbai & Gujarat Hubs)",
         "ports": [
-            PortSpec("P1", "Port of JNPT (Mumbai)",      4, 6, 370.0, 15.0, 16.0, 0.88, 42.0, 60.0, 18.95, 72.95),
-            PortSpec("P2", "Port of Mundra (Gujarat)",   5, 8, 400.0, 16.5, 14.0, 0.92, 38.0, 55.0, 22.74, 69.70),
-            PortSpec("P3", "Port of Cochin (Kerala)",    3, 4, 320.0, 13.5, 19.0, 0.80, 45.0, 65.0,  9.96, 76.26),
+            PortSpec("P1", "Port of JNPT (Nhava Sheva / Mumbai)", 4, 6, 370.0, 15.0, 16.0, 0.88, 42.0, 60.0, 18.95, 72.95),
+            PortSpec("P2", "Mumbai Port (MbPA Harbor)",           3, 4, 300.0, 12.5, 18.0, 0.84, 39.0, 52.0, 18.93, 72.85),
+            PortSpec("P3", "Port of Hazira (Surat / Gujarat)",    3, 5, 340.0, 14.0, 15.0, 0.90, 40.0, 56.0, 21.10, 72.63),
+            PortSpec("P4", "Port of Mundra (Kutch / Gujarat)",    5, 8, 400.0, 16.5, 14.0, 0.92, 38.0, 55.0, 22.74, 69.70),
+            PortSpec("P5", "Deendayal Port (Kandla / Gujarat)",   4, 6, 360.0, 14.5, 16.0, 0.87, 36.0, 50.0, 23.01, 70.22),
         ],
     },
     "europe": {
@@ -327,9 +356,16 @@ def get_coordinates_for_cluster(cluster_key: str = "india") -> Dict[str, Dict[st
 # Inter-port distances in nautical miles (1 NM = 1.852 km)
 PORT_DISTANCES_NM: Dict[str, Dict[tuple, float]] = {
     "india": {
-        ("P1", "P2"): 480.0,  # JNPT <-> Mundra
-        ("P1", "P3"): 580.0,  # JNPT <-> Cochin
-        ("P2", "P3"): 950.0,  # Mundra <-> Cochin
+        ("P1", "P2"): 12.0,   # JNPT <-> Mumbai Port (Harbor sister ports)
+        ("P1", "P3"): 135.0,  # JNPT <-> Hazira (South Gujarat)
+        ("P1", "P4"): 480.0,  # JNPT <-> Mundra (Gulf of Kutch)
+        ("P1", "P5"): 495.0,  # JNPT <-> Kandla (Gulf of Kutch)
+        ("P2", "P3"): 130.0,  # Mumbai Port <-> Hazira
+        ("P2", "P4"): 475.0,  # Mumbai Port <-> Mundra
+        ("P2", "P5"): 490.0,  # Mumbai Port <-> Kandla
+        ("P3", "P4"): 280.0,  # Hazira <-> Mundra
+        ("P3", "P5"): 250.0,  # Hazira <-> Kandla
+        ("P4", "P5"): 35.0,   # Mundra <-> Kandla (Gulf of Kutch sister ports)
     },
     "europe": {
         ("P1", "P2"): 95.0,   # Rotterdam <-> Antwerp

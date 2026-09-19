@@ -35,6 +35,14 @@ def transform_live_vessels(
 
         service_dur = round(base_dur * weather_mult, 2)
 
+        # Live stream cargo estimation
+        ctype = "High-Value Electronics" if av.length_m > 300 else ("Standard Containerized" if av.length_m > 200 else "Dry Bulk & Minerals")
+        cval = round(av.cargo_teu_estimate * 16000.0, 0)
+        holding_h = round(cval * 0.00006, 0)
+        laycan_end = round(av.eta_relative_hours + 20.0, 1)
+        demurrage_h = 1200.0 if av.length_m > 300 else 900.0
+        charter_day = 32000.0 if av.length_m > 300 else 22000.0
+
         normalized.append(Vessel(
             vessel_id=vid,
             vessel_name=av.vessel_name,
@@ -50,6 +58,14 @@ def transform_live_vessels(
             destination_port=av.destination_port,
             preferred_port=av.preferred_port,
             status="scheduled",
+            cargo_type=ctype,
+            cargo_value_usd=cval,
+            holding_cost_per_hour_usd=holding_h,
+            laycan_end_h=laycan_end,
+            demurrage_rate_per_hour_usd=demurrage_h,
+            vessel_daily_charter_usd=charter_day,
+            priority_score=60.0 if av.priority == 1 else (45.0 if av.priority == 2 else 30.0),
+            priority_reasons=[],
         ))
 
     normalized.sort(key=lambda v: v.arrival_time)
