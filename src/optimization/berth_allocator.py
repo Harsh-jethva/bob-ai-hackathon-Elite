@@ -73,8 +73,12 @@ def _solve_greedy_fallback(
     t0 = time.time()
     sorted_vessels = sorted(vessels, key=lambda v: (v.priority, v.arrival_time))
 
-    berth_next = {b.berth_id: 0.0 for b in berths}
-    crane_next = {c.crane_id: 0.0 for c in cranes}
+    # Respect existing berth occupancy and maintenance windows
+    valid_berths = [b for b in berths if getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)]
+    candidates_pool = valid_berths if valid_berths else berths
+
+    berth_next = {b.berth_id: getattr(b, "available_from", 0.0) for b in candidates_pool}
+    crane_next = {c.crane_id: getattr(c, "available_from", 0.0) for c in cranes}
 
     assignments = []
     deferred_count = 0
@@ -82,8 +86,8 @@ def _solve_greedy_fallback(
 
     for v in sorted_vessels:
         target_port = v.preferred_port or v.destination_port
-        port_berths = [b for b in berths if b.port_id == target_port]
-        candidates = port_berths if port_berths else berths
+        port_berths = [b for b in candidates_pool if b.port_id == target_port]
+        candidates = port_berths if port_berths else candidates_pool
 
         compatible_berths = [
             b for b in candidates
@@ -115,7 +119,7 @@ def _solve_greedy_fallback(
         start = max(earliest_berth, earliest_crane)
         end = start + v.service_duration_h
 
-        is_unplaced = start >= horizon_hours
+        is_unplaced = start >= horizon_hours or end > getattr(best_berth, "available_to", horizon_hours)
         if is_unplaced:
             deferred_count += 1
 
@@ -125,7 +129,7 @@ def _solve_greedy_fallback(
         assignments.append(ScheduleAssignment(
             vessel_id=v.vessel_id,
             berth_id=best_berth.berth_id if not is_unplaced else "unassigned",
-            crane_id=assigned_cranes[0].crane_id if (assigned_cranes and not is_unplaced) else "unassigned",
+            crane_id=", ".join(c.crane_id for c in assigned_cranes) if (assigned_cranes and not is_unplaced) else "unassigned",
             start_time=round(start, 2) if not is_unplaced else 0.0,
             end_time=round(end, 2) if not is_unplaced else 0.0,
             wait_time=round(wait, 2) if not is_unplaced else 0.0,
@@ -207,17 +211,17 @@ def solve_berth_allocation(
 
         for v in vessels:
             v_id = v.vessel_id
-            # Compatible berths
+            # Compatible operational berths
             comp_berths = [
                 b for b in berths
                 if v.vessel_length_m <= b.max_vessel_length_m
                 and v.vessel_draft_m <= b.max_vessel_draft_m
+                and getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)
             ]
             if not comp_berths:
-                comp_berths = berths
+                comp_berths = [b for b in berths if getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)] or berths
 
             dur_int = max(1, int(round(v.service_duration_h * scale)))
-            # Use ceil so service cannot start before arrival timestamp
             arr_int = max(0, int(round(v.arrival_time * scale)))
 
             deferred_vars[v_id] = model.NewBoolVar(f"def_{v_id}")
@@ -225,11 +229,22 @@ def solve_berth_allocation(
 
             for b in comp_berths:
                 b_id = b.berth_id
+                b_from = getattr(b, "available_from", 0.0)
+                b_to = getattr(b, "available_to", horizon_hours)
+                b_from_int = max(0, int(round(b_from * scale)))
+                b_to_int = min(horizon_int, int(round(b_to * scale)))
+                earliest_start = max(arr_int, b_from_int)
+
+                if earliest_start >= horizon_int or earliest_start + dur_int > b_to_int:
+                    continue
+
                 is_assigned = model.NewBoolVar(f"assign_{v_id}_{b_id}")
-                # Start allowed between arrival and horizon
-                start_v = model.NewIntVar(arr_int, horizon_int, f"start_{v_id}_{b_id}")
-                end_v = model.NewIntVar(arr_int + dur_int, horizon_int + dur_int, f"end_{v_id}_{b_id}")
+                start_v = model.NewIntVar(earliest_start, horizon_int, f"start_{v_id}_{b_id}")
+                end_v = model.NewIntVar(earliest_start + dur_int, horizon_int + dur_int, f"end_{v_id}_{b_id}")
                 interval_v = model.NewOptionalIntervalVar(start_v, dur_int, end_v, is_assigned, f"int_{v_id}_{b_id}")
+
+                if b_to < horizon_hours:
+                    model.Add(end_v <= b_to_int).OnlyEnforceIf(is_assigned)
 
                 assign_vars[(v_id, b_id)] = is_assigned
                 start_vars[(v_id, b_id)] = start_v
@@ -258,6 +273,18 @@ def solve_berth_allocation(
             if total_cranes > 0:
                 port_intervals = []
                 port_demands = []
+
+                # Account for pre-busy cranes
+                for c in port_cranes:
+                    c_busy = getattr(c, "available_from", 0.0)
+                    if c_busy > 0.0:
+                        busy_int = min(horizon_int, int(round(c_busy * scale)))
+                        if busy_int > 0:
+                            port_intervals.append(
+                                model.NewFixedSizeIntervalVar(0, busy_int, f"busy_c_{c.crane_id}")
+                            )
+                            port_demands.append(1)
+
                 for v in vessels:
                     for b in berths:
                         if b.port_id == pid and (v.vessel_id, b.berth_id) in interval_vars:
@@ -310,6 +337,10 @@ def solve_berth_allocation(
             deferred_count = 0
             total_wait = 0.0
 
+            # Dynamic crane allocation tracker
+            crane_avail_at = {c.crane_id: getattr(c, "available_from", 0.0) for c in cranes}
+
+            scheduled_items = []
             for v in vessels:
                 v_id = v.vessel_id
                 is_def = solver.BooleanValue(deferred_vars[v_id])
@@ -327,6 +358,13 @@ def solve_berth_allocation(
                                 end_val = start_val + v.service_duration_h
                                 break
 
+                scheduled_items.append((v, is_def, assigned_berth_id, start_val, end_val))
+
+            # Earlier scheduled ships get crane priority
+            scheduled_items.sort(key=lambda x: (x[1], x[3]))
+
+            for v, is_def, assigned_berth_id, start_val, end_val in scheduled_items:
+                v_id = v.vessel_id
                 if is_def or assigned_berth_id is None:
                     deferred_count += 1
                     assignments.append(ScheduleAssignment(
@@ -343,7 +381,12 @@ def solve_berth_allocation(
                 else:
                     b_obj = berths_by_id[assigned_berth_id]
                     p_cranes = [c for c in cranes if c.port_id == b_obj.port_id]
-                    assigned_crane_id = p_cranes[0].crane_id if p_cranes else "C-1"
+                    p_cranes_sorted = sorted(p_cranes, key=lambda c: crane_avail_at[c.crane_id])
+                    req_cranes = min(v.required_cranes, len(p_cranes_sorted)) if p_cranes_sorted else 0
+                    chosen_cranes = p_cranes_sorted[:req_cranes]
+                    for c in chosen_cranes:
+                        crane_avail_at[c.crane_id] = end_val
+                    assigned_crane_id = ", ".join(c.crane_id for c in chosen_cranes) if chosen_cranes else (p_cranes[0].crane_id if p_cranes else "C-1")
 
                     wait = max(0.0, start_val - v.arrival_time)
                     total_wait += wait

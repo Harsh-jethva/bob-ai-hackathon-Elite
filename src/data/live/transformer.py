@@ -18,7 +18,7 @@ def transform_live_vessels(
     normalized: List[Vessel] = []
 
     for idx, av in enumerate(ais_vessels):
-        vid = f"V-{av.imo[-4:]}"
+        vid = f"V-LIVE-{idx+1:03d}"
         # In container shipping, a port call exchange is ~5-15% of total vessel capacity (400-2,000 TEU)
         port_call_teu = min(av.cargo_teu_estimate, max(450.0, av.cargo_teu_estimate * 0.08))
         gross_crane_speed = max(1, av.required_cranes) * 28.0  # ~28 container moves per crane/hr

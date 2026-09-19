@@ -52,9 +52,9 @@ class LiveDataManager:
 
         # 1. Fetch live terminal configurations (ports, berths, cranes) for this cluster
         ports = self.tos_connector.fetch_live_ports(cluster=cluster_key)
-        berths = self.tos_connector.fetch_live_berths(ports=ports)
-        cranes = self.tos_connector.fetch_live_cranes(ports=ports)
-        tos_health = self.tos_connector.fetch_tos_health(ports=ports)
+        berths = self.tos_connector.fetch_live_berths(ports=ports, cluster=cluster_key)
+        cranes = self.tos_connector.fetch_live_cranes(ports=ports, cluster=cluster_key)
+        tos_health = self.tos_connector.fetch_tos_health(ports=ports, cluster=cluster_key)
 
         # 2. Fetch live weather across all ports in cluster
         weather_map = self.weather_connector.fetch_all_ports_weather(ports=ports)

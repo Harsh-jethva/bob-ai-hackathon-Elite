@@ -83,13 +83,16 @@ def generate_fcfs(
 
     # FCFS = sort by arrival, assign earliest available berth/crane
     assignments = []
-    berth_next = {b.berth_id: 0.0 for b in berths}
-    crane_next = {c.crane_id: 0.0 for c in cranes}
+    valid_berths = [b for b in berths if getattr(b, "available_to", horizon_hours) > getattr(b, "available_from", 0.0)]
+    candidates_pool = valid_berths if valid_berths else berths
+
+    berth_next = {b.berth_id: getattr(b, "available_from", 0.0) for b in candidates_pool}
+    crane_next = {c.crane_id: getattr(c, "available_from", 0.0) for c in cranes}
 
     for v in sorted(vessels, key=lambda x: x.arrival_time):
         target_port = v.preferred_port or v.destination_port
-        port_berths = [b for b in berths if b.port_id == target_port]
-        candidates = port_berths if port_berths else berths
+        port_berths = [b for b in candidates_pool if b.port_id == target_port]
+        candidates = port_berths if port_berths else candidates_pool
 
         compatible = [b for b in candidates
                       if v.vessel_length_m <= b.max_vessel_length_m
@@ -102,17 +105,23 @@ def generate_fcfs(
         port_cranes = [c for c in cranes if c.port_id == best.port_id]
         if not port_cranes:
             port_cranes = cranes
-        # Distribute across available cranes at port
-        assigned_crane = min(port_cranes, key=lambda c: crane_next[c.crane_id]) if port_cranes else (cranes[0] if cranes else None)
-        crane_start = crane_next[assigned_crane.crane_id] if assigned_crane else 0.0
+
+        # Assign up to required cranes
+        req_cranes = min(v.required_cranes, len(port_cranes))
+        sorted_cranes = sorted(port_cranes, key=lambda c: crane_next[c.crane_id])
+        assigned_cranes = sorted_cranes[:req_cranes] if req_cranes > 0 else (port_cranes[:1] if port_cranes else [])
+
+        crane_start = max([crane_next[c.crane_id] for c in assigned_cranes], default=earliest)
         start = max(earliest, crane_start)
         end = start + v.service_duration_h
-        is_unplaced = start >= horizon_hours
+        is_unplaced = start >= horizon_hours or end > getattr(best, "available_to", horizon_hours)
+
+        crane_label = ", ".join(c.crane_id for c in assigned_cranes) if (assigned_cranes and not is_unplaced) else "unassigned"
 
         assignments.append(ScheduleAssignment(
             vessel_id=v.vessel_id,
             berth_id=best.berth_id if not is_unplaced else "unassigned",
-            crane_id=assigned_crane.crane_id if (assigned_crane and not is_unplaced) else "unassigned",
+            crane_id=crane_label,
             start_time=round(start, 2) if not is_unplaced else 0.0,
             end_time=round(end, 2) if not is_unplaced else 0.0,
             wait_time=round(max(0.0, start - v.arrival_time), 2) if not is_unplaced else 0.0,
@@ -122,8 +131,8 @@ def generate_fcfs(
         ))
         if not is_unplaced:
             berth_next[best.berth_id] = end
-            if assigned_crane:
-                crane_next[assigned_crane.crane_id] = end
+            for c in assigned_cranes:
+                crane_next[c.crane_id] = end
 
     kpis = _compute_kpis(assignments, vessels, berths, cranes, horizon_hours)
     return PlanResult(

@@ -42,52 +42,36 @@ class TOSConnector:
         """Fetch live berth availability and maintenance statuses."""
         if ports is None:
             ports = self.fetch_live_ports(cluster)
-        berths: List[Berth] = []
-
-        for p in ports:
-            for i in range(p.num_berths):
-                b_id = f"B-{p.port_id}-{i+1}"
-                berths.append(Berth(
-                    berth_id=b_id,
-                    port_id=p.port_id,
-                    max_vessel_length_m=round(p.max_vessel_length_m * 0.95, 1),
-                    max_vessel_draft_m=round(p.max_vessel_draft_m * 0.95, 1),
-                    available_from=0.0,
-                    available_to=72.0,
-                ))
-        return berths
+        from src.data.generator import generate_berths
+        return generate_berths(ports=ports, cluster=cluster)
 
     def fetch_live_cranes(self, ports: Optional[List[PortSpec]] = None, cluster: Optional[str] = None) -> List[Crane]:
         """Fetch live crane telemetry, gang productivity, and active states."""
         if ports is None:
             ports = self.fetch_live_ports(cluster)
-        cranes: List[Crane] = []
+        from src.data.generator import generate_cranes
+        return generate_cranes(ports=ports, cluster=cluster)
 
-        for p in ports:
-            for i in range(p.num_cranes):
-                c_id = f"C-{p.port_id}-{i+1}"
-                cranes.append(Crane(
-                    crane_id=c_id,
-                    port_id=p.port_id,
-                    available_from=0.0,
-                    available_to=72.0,
-                    productivity_teu_per_h=round(p.avg_service_time_h * 10, 1),
-                ))
-        return cranes
-
-    def fetch_tos_health(self, ports: Optional[List[PortSpec]] = None) -> Dict[str, TOSPortStatus]:
+    def fetch_tos_health(self, ports: Optional[List[PortSpec]] = None, cluster: Optional[str] = None) -> Dict[str, TOSPortStatus]:
         """Get summary health metrics across all terminals."""
+        from src.config.ports import get_live_state
         ports = ports or DEFAULT_PORTS
+        cluster_key = cluster or "india"
         health = {}
         for p in ports:
+            st_info = get_live_state(cluster_key, p.port_id)
+            busy_cranes = sum(1 for v in st_info.crane_busy_until.values() if v > 0)
             health[p.port_id] = TOSPortStatus(
                 port_id=p.port_id,
                 port_name=p.port_name,
-                active_berths=p.num_berths,
+                active_berths=p.num_berths - len(st_info.occupied_berths),
                 total_berths=p.num_berths,
-                online_cranes=p.num_cranes,
+                online_cranes=p.num_cranes - busy_cranes,
                 total_cranes=p.num_cranes,
                 average_moves_per_hour=32.5,
-                maintenance_alerts=[],
+                maintenance_alerts=[
+                    f"Berth {ob.berth_id} in use by {ob.vessel_name} (free at T+{ob.free_at_hours:.1f}h)"
+                    for ob in st_info.occupied_berths
+                ],
             )
         return health
